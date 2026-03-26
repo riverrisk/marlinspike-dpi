@@ -1,0 +1,42 @@
+[package]
+name = "marlinspike-dpi"
+version = "0.6.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Standalone DPI engine for MarlinSpike and passive OT/ICS packet-analysis pipelines"
+readme = "README.md"
+repository = "https://github.com/riverrisk/marlinspike-dpi"
+keywords = ["ot", "ics", "pcap", "dpi", "industrial"]
+categories = ["command-line-utilities", "network-programming", "parser-implementations"]
+
+[features]
+default = []
+ffi = []
+
+[lib]
+name = "fm_dpi"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "marlinspike-dpi"
+path = "src/main.rs"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[dependencies]
+tracing = "0.1"
+bytes = "1"
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

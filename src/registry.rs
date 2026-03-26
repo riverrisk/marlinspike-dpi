@@ -1,0 +1,352 @@
+//! Dissector registry — dispatches packets to protocol-specific parsers.
+
+use std::collections::BTreeMap;
+use std::net::IpAddr;
+
+/// Context extracted from lower-layer headers for a single packet.
+#[derive(Debug, Clone)]
+pub struct PacketContext {
+    pub src_mac: [u8; 6],
+    pub dst_mac: [u8; 6],
+    pub src_ip: IpAddr,
+    pub dst_ip: IpAddr,
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub vlan_id: Option<u16>,
+    pub timestamp: u64,
+}
+
+/// Protocol-specific parsed data, matching `bronze.proto` oneof variants.
+#[derive(Debug, Clone)]
+pub enum ProtocolData {
+    Modbus(ModbusFields),
+    Dnp3(Dnp3Fields),
+    EthernetIp(EthernetIpFields),
+    OpcUa(OpcUaFields),
+    S7comm(S7commFields),
+    Profinet(ProfinetFields),
+    Dhcp(DhcpFields),
+    Snmp(SnmpFields),
+    Cdp(CdpFields),
+    Stp(StpFields),
+    Dns(DnsFields),
+    Tls(TlsFields),
+    Http(HttpFields),
+    Arp(ArpFields),
+    Lldp(LldpFields),
+}
+
+impl ProtocolData {
+    /// Returns the protocol name string used in `BronzeRecord.protocol`.
+    pub fn protocol_name(&self) -> &'static str {
+        match self {
+            Self::Modbus(_) => "modbus",
+            Self::Dnp3(_) => "dnp3",
+            Self::EthernetIp(_) => "ethernet_ip",
+            Self::OpcUa(_) => "opc_ua",
+            Self::S7comm(_) => "s7comm",
+            Self::Profinet(_) => "profinet",
+            Self::Dhcp(_) => "dhcp",
+            Self::Snmp(_) => "snmp",
+            Self::Cdp(_) => "cdp",
+            Self::Stp(_) => "stp",
+            Self::Dns(_) => "dns",
+            Self::Tls(_) => "tls",
+            Self::Http(_) => "http",
+            Self::Arp(_) => "arp",
+            Self::Lldp(_) => "lldp",
+        }
+    }
+}
+
+// ── Field structs ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct ModbusFields {
+    pub transaction_id: u16,
+    pub unit_id: u8,
+    pub function_code: u8,
+    pub is_exception: bool,
+    pub exception_code: u8,
+    pub registers: Vec<(u16, u16)>, // (address, value)
+    pub device_identification: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Dnp3Fields {
+    pub source_address: u16,
+    pub destination_address: u16,
+    pub function_code: u8,
+    pub application_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EthernetIpFields {
+    pub command: u16,
+    pub session_handle: u32,
+    pub cip_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpcUaFields {
+    pub message_type: String,
+    pub request_id: u32,
+    pub service_type: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct S7commFields {
+    pub rosctr: u8,
+    pub function: u8,
+    pub parameter: Vec<u8>,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProfinetFields {
+    pub frame_id: u16,
+    pub service_type: String,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DhcpFields {
+    pub op: u8,
+    pub xid: u32,
+    pub client_mac: [u8; 6],
+    pub ciaddr: Option<String>,
+    pub yiaddr: Option<String>,
+    pub siaddr: Option<String>,
+    pub giaddr: Option<String>,
+    pub message_type: Option<u8>,
+    pub hostname: Option<String>,
+    pub client_id: Option<String>,
+    pub vendor_class: Option<String>,
+    pub requested_ip: Option<String>,
+    pub server_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnmpFields {
+    pub version: String,
+    pub community: Option<String>,
+    pub pdu_type: String,
+    pub request_id: Option<i32>,
+    pub var_binds: Vec<SnmpVarBind>,
+    pub sys_name: Option<String>,
+    pub sys_descr: Option<String>,
+    pub sys_object_id: Option<String>,
+    pub engine_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SnmpVarBind {
+    pub oid: String,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CdpFields {
+    pub version: u8,
+    pub ttl: u8,
+    pub checksum: u16,
+    pub device_id: String,
+    pub port_id: String,
+    pub platform: Option<String>,
+    pub software_version: Option<String>,
+    pub capabilities: Vec<String>,
+    pub native_vlan: Option<u16>,
+    pub duplex: Option<String>,
+    pub management_addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StpFields {
+    pub protocol_version: u8,
+    pub bpdu_type: u8,
+    pub flags: u8,
+    pub root_id: String,
+    pub root_path_cost: u32,
+    pub bridge_id: String,
+    pub port_id: u16,
+    pub hello_time: u16,
+    pub max_age: u16,
+    pub forward_delay: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct DnsFields {
+    pub transaction_id: u16,
+    pub is_response: bool,
+    pub queries: Vec<String>,
+    pub answers: Vec<String>,
+    /// Structured DNS resource records from answer + additional sections.
+    /// Populated for mDNS responses; gives access to TXT key=value, SRV
+    /// targets, and A/AAAA bindings that the flat `answers` strings lose.
+    pub records: Vec<DnsRecord>,
+}
+
+/// A parsed DNS resource record (answer, authority, or additional).
+#[derive(Debug, Clone)]
+pub struct DnsRecord {
+    /// Owner name (e.g. "Bathroom TV._airplay._tcp.local").
+    pub name: String,
+    /// Record type: A, AAAA, PTR, TXT, SRV, etc.
+    pub rtype: DnsRecordType,
+    /// Parsed data — varies by record type.
+    pub data: DnsRecordData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsRecordType {
+    A,
+    AAAA,
+    PTR,
+    TXT,
+    SRV,
+    Other(u16),
+}
+
+#[derive(Debug, Clone)]
+pub enum DnsRecordData {
+    /// A record: IPv4 address.
+    A(String),
+    /// AAAA record: IPv6 address.
+    Aaaa(String),
+    /// PTR record: domain name.
+    Ptr(String),
+    /// TXT record: key=value pairs.
+    Txt(Vec<String>),
+    /// SRV record: target host and port.
+    Srv {
+        target: String,
+        port: u16,
+        priority: u16,
+        weight: u16,
+    },
+    /// Unparsed record.
+    Raw(Vec<u8>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TlsFields {
+    pub version: String,
+    pub cipher_suite: String,
+    pub sni: String,
+    pub certificate_subjects: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpFields {
+    pub method: String,
+    pub host: String,
+    pub uri: String,
+    pub status_code: u16,
+    pub content_type: String,
+    pub content_length: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArpFields {
+    pub operation: u16,
+    pub sender_mac: [u8; 6],
+    pub sender_ip: [u8; 4],
+    pub target_mac: [u8; 6],
+    pub target_ip: [u8; 4],
+}
+
+#[derive(Debug, Clone)]
+pub struct LldpFields {
+    pub chassis_id: String,
+    pub port_id: String,
+    pub ttl: u16,
+    pub system_name: String,
+    pub system_description: String,
+    pub capabilities: Vec<String>,
+}
+
+// ── Trait + Registry ───────────────────────────────────────────
+
+/// Trait implemented by each protocol dissector.
+pub trait ProtocolDissector: Send + Sync {
+    /// Human-readable name (e.g. `"modbus"`).
+    fn name(&self) -> &str;
+
+    /// Quick check: can this dissector handle the packet?
+    fn can_parse(&self, data: &[u8], src_port: u16, dst_port: u16) -> bool;
+
+    /// Attempt full parse. Returns `None` if the data turns out to be invalid.
+    fn parse(&self, data: &[u8], context: &PacketContext) -> Option<ProtocolData>;
+}
+
+/// Holds all registered dissectors and dispatches packets through them.
+pub struct DissectorRegistry {
+    dissectors: Vec<Box<dyn ProtocolDissector>>,
+}
+
+impl DissectorRegistry {
+    pub fn new() -> Self {
+        Self {
+            dissectors: Vec::new(),
+        }
+    }
+
+    /// Create a registry pre-loaded with all built-in dissectors.
+    pub fn with_defaults() -> Self {
+        use crate::dissectors::*;
+
+        let mut reg = Self::new();
+        reg.register(Box::new(modbus::ModbusDissector));
+        reg.register(Box::new(dns::DnsDissector));
+        reg.register(Box::new(arp::ArpDissector));
+        reg.register(Box::new(lldp::LldpDissector));
+        reg.register(Box::new(cdp::CdpDissector));
+        reg.register(Box::new(stp::StpDissector));
+        reg.register(Box::new(http::HttpDissector));
+        reg.register(Box::new(dhcp::DhcpDissector));
+        reg.register(Box::new(snmp::SnmpDissector));
+        reg.register(Box::new(dnp3::Dnp3Dissector));
+        reg.register(Box::new(opc_ua::OpcUaDissector));
+        reg.register(Box::new(s7comm::S7commDissector));
+        reg.register(Box::new(profinet::ProfinetDissector));
+        reg.register(Box::new(ethernet_ip::EthernetIpDissector));
+        reg
+    }
+
+    pub fn register(&mut self, dissector: Box<dyn ProtocolDissector>) {
+        self.dissectors.push(dissector);
+    }
+
+    /// Try each dissector in order; return the first successful parse.
+    pub fn dispatch(&self, data: &[u8], context: &PacketContext) -> Option<ProtocolData> {
+        for d in &self.dissectors {
+            if d.can_parse(data, context.src_port, context.dst_port) {
+                if let Some(result) = d.parse(data, context) {
+                    return Some(result);
+                }
+            }
+        }
+        None
+    }
+}
+
+impl Default for DissectorRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────
+
+/// Format a 6-byte MAC address as `"aa:bb:cc:dd:ee:ff"`.
+pub fn format_mac(mac: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
+/// Format a 4-byte IPv4 address as dotted decimal.
+pub fn format_ipv4(ip: &[u8; 4]) -> String {
+    format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3])
+}
