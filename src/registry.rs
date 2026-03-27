@@ -3,6 +3,10 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
+use crate::dissectors::{
+    ethercat::EthercatFields, hart_ip::HartIpFields, iec61850::Iec61850Fields,
+};
+
 /// Context extracted from lower-layer headers for a single packet.
 #[derive(Debug, Clone)]
 pub struct PacketContext {
@@ -19,6 +23,12 @@ pub struct PacketContext {
 /// Protocol-specific parsed data, matching `bronze.proto` oneof variants.
 #[derive(Debug, Clone)]
 pub enum ProtocolData {
+    Bacnet(BacnetFields),
+    Iec104(Iec104Fields),
+    OmronFins(OmronFinsFields),
+    HartIp(HartIpFields),
+    Iec61850(Iec61850Fields),
+    Ethercat(EthercatFields),
     Modbus(ModbusFields),
     Dnp3(Dnp3Fields),
     EthernetIp(EthernetIpFields),
@@ -34,12 +44,30 @@ pub enum ProtocolData {
     Http(HttpFields),
     Arp(ArpFields),
     Lldp(LldpFields),
+    Ntp(NtpFields),
+    Mqtt(MqttFields),
+    Syslog(SyslogFields),
+    Ftp(FtpFields),
+    Ssh(SshFields),
+    Radius(RadiusFields),
+    Vtp(VtpFields),
+    Mrp(MrpFields),
+    Mstp(MstpFields),
+    Pvst(PvstFields),
+    Prp(PrpFields),
+    Lacp(LacpFields),
 }
 
 impl ProtocolData {
     /// Returns the protocol name string used in `BronzeRecord.protocol`.
     pub fn protocol_name(&self) -> &'static str {
         match self {
+            Self::Bacnet(_) => "bacnet",
+            Self::Iec104(_) => "iec104",
+            Self::OmronFins(_) => "omron_fins",
+            Self::HartIp(_) => "hart_ip",
+            Self::Iec61850(_) => "iec61850",
+            Self::Ethercat(_) => "ethercat",
             Self::Modbus(_) => "modbus",
             Self::Dnp3(_) => "dnp3",
             Self::EthernetIp(_) => "ethernet_ip",
@@ -55,11 +83,73 @@ impl ProtocolData {
             Self::Http(_) => "http",
             Self::Arp(_) => "arp",
             Self::Lldp(_) => "lldp",
+            Self::Ntp(_) => "ntp",
+            Self::Mqtt(_) => "mqtt",
+            Self::Syslog(_) => "syslog",
+            Self::Ftp(_) => "ftp",
+            Self::Ssh(_) => "ssh",
+            Self::Radius(_) => "radius",
+            Self::Vtp(_) => "vtp",
+            Self::Mrp(_) => "mrp",
+            Self::Mstp(_) => "mstp",
+            Self::Pvst(_) => "pvst",
+            Self::Prp(_) => "prp",
+            Self::Lacp(_) => "lacp",
         }
     }
 }
 
 // ── Field structs ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct BacnetFields {
+    pub link_variant: String,
+    pub bvlc_function: Option<String>,
+    pub npdu_control: u8,
+    pub apdu_type: String,
+    pub service: String,
+    pub invoke_id: Option<u8>,
+    pub device_instance: Option<u32>,
+    pub vendor_id: Option<u16>,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Iec104Fields {
+    pub frame_type: String,
+    pub send_sequence: Option<u16>,
+    pub receive_sequence: Option<u16>,
+    pub u_format: Option<String>,
+    pub type_id: Option<u8>,
+    pub cause_of_transmission: Option<u16>,
+    pub common_address: Option<u16>,
+    pub information_object_address: Option<u32>,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OmronFinsFields {
+    pub frame_variant: String,
+    pub tcp_command: Option<u32>,
+    pub tcp_error_code: Option<u32>,
+    pub icf: Option<u8>,
+    pub rsv: Option<u8>,
+    pub gateway_count: Option<u8>,
+    pub destination_network: Option<u8>,
+    pub destination_node: Option<u8>,
+    pub destination_unit: Option<u8>,
+    pub source_network: Option<u8>,
+    pub source_node: Option<u8>,
+    pub source_unit: Option<u8>,
+    pub service_id: Option<u8>,
+    pub command_code: Option<u16>,
+    pub command_name: Option<String>,
+    pub memory_area: Option<u8>,
+    pub memory_word: Option<u16>,
+    pub memory_bit: Option<u8>,
+    pub item_count: Option<u16>,
+    pub payload: Vec<u8>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ModbusFields {
@@ -265,6 +355,165 @@ pub struct LldpFields {
     pub capabilities: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct NtpFields {
+    pub version: u8,
+    pub mode: u8,
+    pub mode_name: String,
+    pub leap_indicator: u8,
+    pub stratum: u8,
+    pub poll: i8,
+    pub precision: i8,
+    pub root_delay_ms: f64,
+    pub root_dispersion_ms: f64,
+    pub reference_id: String,
+    pub reference_timestamp: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MqttFields {
+    pub packet_type: u8,
+    pub packet_type_name: String,
+    pub protocol_name: Option<String>,
+    pub protocol_version: Option<u8>,
+    pub client_id: Option<String>,
+    pub username: Option<String>,
+    pub topic: Option<String>,
+    pub qos: Option<u8>,
+    pub retain: Option<bool>,
+    pub clean_session: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyslogFields {
+    pub facility: u8,
+    pub facility_name: String,
+    pub severity: u8,
+    pub severity_name: String,
+    pub hostname: Option<String>,
+    pub app_name: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FtpFields {
+    pub is_response: bool,
+    pub command: Option<String>,
+    pub argument: Option<String>,
+    pub reply_code: Option<u16>,
+    pub reply_text: Option<String>,
+    pub banner: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SshFields {
+    pub protocol_version: String,
+    pub software_version: String,
+    pub comments: Option<String>,
+    pub banner: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RadiusFields {
+    pub code: u8,
+    pub code_name: String,
+    pub identifier: u8,
+    pub username: Option<String>,
+    pub nas_ip_address: Option<String>,
+    pub nas_identifier: Option<String>,
+    pub calling_station_id: Option<String>,
+    pub called_station_id: Option<String>,
+    pub nas_port_type: Option<u32>,
+    pub framed_ip_address: Option<String>,
+    pub service_type: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VtpFields {
+    pub version: u8,
+    pub message_type: u8,
+    pub message_type_name: String,
+    pub domain_name: String,
+    pub revision: Option<u32>,
+    pub vlans: Vec<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MrpFields {
+    pub version: u16,
+    pub frame_type: u16,
+    pub frame_type_name: String,
+    pub domain_uuid: Option<String>,
+    pub ring_state: Option<String>,
+    pub priority: Option<u16>,
+    pub source_mac: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MstpFields {
+    pub protocol_version: u8,
+    pub bpdu_type: u8,
+    pub flags: u8,
+    pub root_id: String,
+    pub root_path_cost: u32,
+    pub bridge_id: String,
+    pub port_id: u16,
+    pub config_name: Option<String>,
+    pub revision_level: Option<u16>,
+    pub msti_records: Vec<MstiRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MstiRecord {
+    pub flags: u8,
+    pub regional_root: String,
+    pub internal_path_cost: u32,
+    pub bridge_priority: u8,
+    pub remaining_hops: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct PvstFields {
+    pub protocol_version: u8,
+    pub bpdu_type: u8,
+    pub flags: u8,
+    pub root_id: String,
+    pub root_path_cost: u32,
+    pub bridge_id: String,
+    pub port_id: u16,
+    pub originating_vlan: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrpFields {
+    pub supervision_path: u16,
+    pub supervision_version: u16,
+    pub supervision_type: u16,
+    pub supervision_type_name: String,
+    pub source_mac: Option<String>,
+    pub red_box_mac: Option<String>,
+    pub sequence_nr: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LacpFields {
+    pub version: u8,
+    pub actor: LacpPartner,
+    pub partner: LacpPartner,
+    pub max_delay: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LacpPartner {
+    pub system_priority: u16,
+    pub system: String,
+    pub key: u16,
+    pub port_priority: u16,
+    pub port: u16,
+    pub state: u8,
+    pub state_flags: Vec<String>,
+}
+
 // ── Trait + Registry ───────────────────────────────────────────
 
 /// Trait implemented by each protocol dissector.
@@ -296,6 +545,10 @@ impl DissectorRegistry {
         use crate::dissectors::*;
 
         let mut reg = Self::new();
+        reg.register(Box::new(bacnet::BacnetDissector));
+        reg.register(Box::new(iec104::Iec104Dissector));
+        reg.register(Box::new(fins::OmronFinsDissector));
+        reg.register(Box::new(hart_ip::HartIpDissector));
         reg.register(Box::new(modbus::ModbusDissector));
         reg.register(Box::new(dns::DnsDissector));
         reg.register(Box::new(arp::ArpDissector));
@@ -308,8 +561,22 @@ impl DissectorRegistry {
         reg.register(Box::new(dnp3::Dnp3Dissector));
         reg.register(Box::new(opc_ua::OpcUaDissector));
         reg.register(Box::new(s7comm::S7commDissector));
+        reg.register(Box::new(iec61850::Iec61850Dissector));
         reg.register(Box::new(profinet::ProfinetDissector));
+        reg.register(Box::new(ethercat::EthercatDissector));
         reg.register(Box::new(ethernet_ip::EthernetIpDissector));
+        reg.register(Box::new(ntp::NtpDissector));
+        reg.register(Box::new(mqtt::MqttDissector));
+        reg.register(Box::new(syslog::SyslogDissector));
+        reg.register(Box::new(ftp::FtpDissector));
+        reg.register(Box::new(ssh::SshDissector));
+        reg.register(Box::new(radius::RadiusDissector));
+        reg.register(Box::new(vtp::VtpDissector));
+        reg.register(Box::new(mrp::MrpDissector));
+        reg.register(Box::new(mstp::MstpDissector));
+        reg.register(Box::new(pvst::PvstDissector));
+        reg.register(Box::new(prp::PrpDissector));
+        reg.register(Box::new(lacp::LacpDissector));
         reg
     }
 

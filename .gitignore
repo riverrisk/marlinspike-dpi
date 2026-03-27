@@ -1,6 +1,4 @@
 /target
-/.idea
-/.vscode
-/*.dylib
-/*.so
-/*.a
+Cargo.lock
+.DS_Store
+INTERNALUSE/

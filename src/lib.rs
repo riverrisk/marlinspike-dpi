@@ -1,10 +1,10 @@
-//! marlinspike-dpi — the standalone MarlinSpike DPI engine.
+//! marlinspike-dpi — the shared Marlinspike/Fathom DPI engine.
 //!
 //! Transforms Iron captures (`pcap` or `pcapng`) into Bronze (structured
 //! protocol records).
 //!
-//! The `fm_dpi` Rust library name is retained for compatibility with existing
-//! integrations.
+//! Fathom continues to consume this crate under the `fm-dpi` workspace alias
+//! and `fm_dpi` Rust library name for compatibility.
 //!
 //! `marlinspike-dpi` is consumable directly from Rust today:
 //!
@@ -25,6 +25,7 @@
 //! classic PCAP and PCAPNG input.
 
 pub mod bronze;
+pub mod corpus;
 pub mod dedup;
 pub mod dissectors;
 pub mod engine;
@@ -36,5 +37,10 @@ pub mod ffi;
 pub use crate::bronze::{
     BRONZE_SCHEMA_VERSION, BronzeBatch, BronzeEvent, BronzeEventFamily, EventEnvelope,
     SegmentCheckpoint, activity_records,
+};
+pub use crate::corpus::{
+    CorpusDirectory, CorpusManifest, CorpusManifestSummary, CorpusRoadmapPhase,
+    CorpusValidationOptions, CorpusValidationSummary, FixtureResult, FixtureResultStatus,
+    FixtureSpec, FixtureValidationObservation, ImplementationStatus, validate_corpus_manifest,
 };
 pub use crate::engine::{BronzeSink, DpiEngine, DpiError, DpiSegmentOutput, SegmentMeta};
