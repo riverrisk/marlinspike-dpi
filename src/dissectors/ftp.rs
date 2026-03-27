@@ -7,19 +7,24 @@ pub struct FtpDissector;
 
 impl FtpDissector {
     pub fn parse_fields(&self, data: &[u8]) -> Option<FtpFields> {
-        let text = std::str::from_utf8(data).ok()?;
-        let line = text.lines().next()?.trim();
+        let raw_line = data
+            .split(|byte| matches!(byte, b'\r' | b'\n'))
+            .find(|line| !line.is_empty())?;
+        let line = String::from_utf8_lossy(raw_line);
+        let line = line.trim();
         if line.is_empty() {
             return None;
         }
 
+        let line_bytes = line.as_bytes();
+
         // FTP reply: 3-digit code followed by space or dash.
-        if line.len() >= 4
-            && line[..3].chars().all(|c| c.is_ascii_digit())
-            && matches!(line.as_bytes()[3], b' ' | b'-')
+        if line_bytes.len() >= 4
+            && line_bytes[0..3].iter().all(|byte| byte.is_ascii_digit())
+            && matches!(line_bytes[3], b' ' | b'-')
         {
-            let code: u16 = line[..3].parse().ok()?;
-            let reply_text = line[4..].trim().to_string();
+            let code: u16 = std::str::from_utf8(&line_bytes[0..3]).ok()?.parse().ok()?;
+            let reply_text = String::from_utf8_lossy(&line_bytes[4..]).trim().to_string();
             let banner = if code == 220 {
                 Some(reply_text.clone())
             } else {
@@ -37,11 +42,11 @@ impl FtpDissector {
 
         // FTP command: VERB [argument]\r\n
         let (command, argument) = if let Some(space) = line.find(' ') {
-            let cmd = line[..space].to_uppercase();
+            let cmd = line[..space].to_ascii_uppercase();
             let arg = line[space + 1..].trim().to_string();
             (cmd, if arg.is_empty() { None } else { Some(arg) })
         } else {
-            (line.to_uppercase(), None)
+            (line.to_ascii_uppercase(), None)
         };
 
         // Validate: known FTP commands are 3-4 uppercase letters.
@@ -149,5 +154,12 @@ mod tests {
             dissector.parse(data, &ctx()),
             Some(ProtocolData::Ftp(_))
         ));
+    }
+
+    #[test]
+    fn does_not_panic_on_multibyte_prefix() {
+        let dissector = FtpDissector;
+        let data = b"\0\0\xcf\x96R\0";
+        assert!(dissector.parse_fields(data).is_none());
     }
 }
