@@ -1,0 +1,498 @@
+version: v1
+snapshot_date: 2026-03-25
+reference_catalog: https://icsdefense.net/en/pcap
+resolved_corpus_source: https://api.github.com/repos/EmreEkin/ICS-Pcaps/git/trees/master?recursive=1
+
+summary:
+  archive_directories: 41
+  capture_files: 251
+  non_pcap_sidecars:
+    - DNP3/.DS_Store
+    - IEC60870-104/apci.json
+    - IEC61850/sv
+
+directories:
+  - archive_dir: AMQP
+    file_count: 3
+    normalized_family: amqp
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: AMQP/AMQP_Sample.pcap
+  - archive_dir: ARP
+    file_count: 1
+    normalized_family: arp
+    roadmap_phase: phase_1
+    disposition: keep_and_harden
+    implementation_status: active
+    representative_fixture: ARP/arp.pcap
+  - archive_dir: BOOTP
+    file_count: 6
+    normalized_family: dhcp
+    roadmap_phase: phase_1
+    disposition: infra_decoder
+    implementation_status: active
+    representative_fixture: BOOTP/DHCP.pcap
+  - archive_dir: BSAAP
+    file_count: 3
+    normalized_family: bsaap
+    roadmap_phase: low_priority
+    disposition: corpus_only
+    implementation_status: low_priority
+    representative_fixture: BSAAP/Paging_Request.pcap
+  - archive_dir: BacNET
+    file_count: 17
+    normalized_family: bacnet
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: BacNET/bacnet-ip.pcap
+  - archive_dir: CANopen
+    file_count: 1
+    normalized_family: canopen
+    roadmap_phase: phase_3
+    disposition: long_tail_ot
+    implementation_status: planned
+    representative_fixture: CANopen/CANopen.pcap
+  - archive_dir: CDP
+    file_count: 2
+    normalized_family: cdp
+    roadmap_phase: phase_1
+    disposition: topology_decoder
+    implementation_status: active
+    representative_fixture: CDP/cdp1.pcap
+  - archive_dir: CIP
+    file_count: 5
+    normalized_family: ethernet_ip
+    roadmap_phase: phase_1
+    disposition: active_identity_enrichment
+    implementation_status: partial
+    representative_fixture: CIP/ENIP_CIP-CM.pcap
+  - archive_dir: COTP
+    file_count: 8
+    normalized_family: cotp
+    roadmap_phase: phase_1
+    disposition: transport_backlog
+    implementation_status: planned
+    representative_fixture: COTP/cotp.pcap
+  - archive_dir: CoAP
+    file_count: 6
+    normalized_family: coap
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: CoAP/coap.pcap
+  - archive_dir: DHCP
+    file_count: 8
+    normalized_family: dhcp
+    roadmap_phase: phase_1
+    disposition: infra_decoder
+    implementation_status: active
+    representative_fixture: DHCP/dhcp-discover.pcap
+  - archive_dir: DICOM
+    file_count: 2
+    normalized_family: dicom
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: DICOM/DICOM.pcap
+  - archive_dir: DNP3
+    file_count: 27
+    normalized_family: dnp3
+    roadmap_phase: phase_1
+    disposition: keep_and_harden
+    implementation_status: partial
+    representative_fixture: DNP3/dnp3_read.pcap
+  - archive_dir: EIGRP
+    file_count: 1
+    normalized_family: eigrp
+    roadmap_phase: low_priority
+    disposition: classification_only
+    implementation_status: low_priority
+    representative_fixture: EIGRP/EIGRP_Neighbors.pcap
+  - archive_dir: EtherCat
+    file_count: 2
+    normalized_family: ethercat
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: EtherCat/ethercat.pcap
+  - archive_dir: Ethernet_IP
+    file_count: 5
+    normalized_family: ethernet_ip
+    roadmap_phase: phase_1
+    disposition: keep_and_harden
+    implementation_status: partial
+    representative_fixture: Ethernet_IP/EthernetIP-CIP.pcap
+  - archive_dir: HART_IP
+    file_count: 1
+    normalized_family: hart_ip
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: HART_IP/hart_ip.pcap
+  - archive_dir: HPSW
+    file_count: 1
+    normalized_family: hp_switch
+    roadmap_phase: low_priority
+    disposition: vendor_specific_topology
+    implementation_status: low_priority
+    representative_fixture: HPSW/hp.pcap
+  - archive_dir: HTTP
+    file_count: 5
+    normalized_family: http
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: active
+    representative_fixture: HTTP/http.pcap
+  - archive_dir: IEC60870-104
+    file_count: 19
+    normalized_family: iec104
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: IEC60870-104/iec104.pcap
+  - archive_dir: IEC61850
+    file_count: 23
+    normalized_family: iec61850
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: IEC61850/mms1.pcap
+  - archive_dir: IEEE802.11
+    file_count: 1
+    normalized_family: ieee80211
+    roadmap_phase: phase_4
+    disposition: non_ethernet_backlog
+    implementation_status: planned
+    representative_fixture: IEEE802.11/iee802.11.pcap
+  - archive_dir: LLDP
+    file_count: 5
+    normalized_family: lldp
+    roadmap_phase: phase_1
+    disposition: keep_and_harden
+    implementation_status: active
+    representative_fixture: LLDP/LLDP.pcap
+  - archive_dir: LocalPCAP
+    file_count: 16
+    normalized_family: mixed
+    roadmap_phase: corpus_only
+    disposition: mixed_regression
+    implementation_status: corpus_only
+    representative_fixture: LocalPCAP/ReadCoil.pcap
+  - archive_dir: LonTalk
+    file_count: 1
+    normalized_family: lontalk
+    roadmap_phase: phase_3
+    disposition: long_tail_ot
+    implementation_status: planned
+    representative_fixture: LonTalk/Lon.pcap
+  - archive_dir: MODBUS
+    file_count: 8
+    normalized_family: modbus
+    roadmap_phase: phase_1
+    disposition: keep_and_harden
+    implementation_status: partial
+    representative_fixture: MODBUS/Modbus.pcap
+  - archive_dir: MQTT
+    file_count: 3
+    normalized_family: mqtt
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: MQTT/mqtt.pcap
+  - archive_dir: Malware
+    file_count: 3
+    normalized_family: mixed
+    roadmap_phase: corpus_only
+    disposition: mixed_threat_regression
+    implementation_status: corpus_only
+    representative_fixture: Malware/malware_exec.pcap
+  - archive_dir: Mergecap
+    file_count: 1
+    normalized_family: mixed
+    roadmap_phase: corpus_only
+    disposition: mixed_regression
+    implementation_status: corpus_only
+    representative_fixture: Mergecap/kokteyl.pcap
+  - archive_dir: NetBIOS
+    file_count: 6
+    normalized_family: netbios
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: NetBIOS/netbios-ipx.pcap
+  - archive_dir: OMRON
+    file_count: 5
+    normalized_family: omron_fins
+    roadmap_phase: phase_2
+    disposition: major_ot_decoder
+    implementation_status: partial
+    representative_fixture: OMRON/omron.pcap
+  - archive_dir: OPC-UA
+    file_count: 3
+    normalized_family: opc_ua
+    roadmap_phase: phase_1
+    disposition: parser_activated
+    implementation_status: active
+    representative_fixture: OPC-UA/opc.pcap
+  - archive_dir: PowerlinkEPL
+    file_count: 3
+    normalized_family: powerlink_epl
+    roadmap_phase: phase_3
+    disposition: long_tail_ot
+    implementation_status: planned
+    representative_fixture: PowerlinkEPL/epl.pcap
+  - archive_dir: Profinet
+    file_count: 7
+    normalized_family: profinet
+    roadmap_phase: phase_1
+    disposition: parser_activated
+    implementation_status: active
+    representative_fixture: Profinet/pro1.pcap
+  - archive_dir: RTPS
+    file_count: 3
+    normalized_family: rtps
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: RTPS/rtps.pcap
+  - archive_dir: RTSP
+    file_count: 3
+    normalized_family: rtsp
+    roadmap_phase: phase_4
+    disposition: adjacent_protocol
+    implementation_status: planned
+    representative_fixture: RTSP/rtsp_play.pcap
+  - archive_dir: S7COMM
+    file_count: 16
+    normalized_family: s7comm
+    roadmap_phase: phase_1
+    disposition: parser_activated
+    implementation_status: active
+    representative_fixture: S7COMM/S7.pcap
+  - archive_dir: SNMP
+    file_count: 10
+    normalized_family: snmp
+    roadmap_phase: phase_1
+    disposition: infra_decoder
+    implementation_status: active
+    representative_fixture: SNMP/snmp-get-next.pcap
+  - archive_dir: STP
+    file_count: 2
+    normalized_family: stp
+    roadmap_phase: phase_1
+    disposition: topology_decoder
+    implementation_status: active
+    representative_fixture: STP/stp1.pcap
+  - archive_dir: Ultimate
+    file_count: 1
+    normalized_family: mixed
+    roadmap_phase: corpus_only
+    disposition: mixed_regression
+    implementation_status: corpus_only
+    representative_fixture: Ultimate/TheUltimate.pcap
+  - archive_dir: Zigbee
+    file_count: 8
+    normalized_family: zigbee
+    roadmap_phase: phase_4
+    disposition: non_ethernet_backlog
+    implementation_status: planned
+    representative_fixture: Zigbee/zigbee.pcap
+
+fixtures:
+  - id: arp-basic
+    archive_dir: ARP
+    path: ARP/arp.pcap
+    normalized_family: arp
+    min_events: 1
+    expected_protocols:
+      - arp
+    expected_event_families:
+      - asset_observation
+  - id: lldp-basic
+    archive_dir: LLDP
+    path: LLDP/LLDP.pcap
+    normalized_family: lldp
+    min_events: 1
+    expected_protocols:
+      - lldp
+    expected_event_families:
+      - asset_observation
+      - topology_observation
+  - id: cdp-basic
+    archive_dir: CDP
+    path: CDP/cdp1.pcap
+    normalized_family: cdp
+    min_events: 1
+    expected_protocols:
+      - cdp
+    expected_event_families:
+      - asset_observation
+      - topology_observation
+  - id: stp-basic
+    archive_dir: STP
+    path: STP/stp1.pcap
+    normalized_family: stp
+    min_events: 1
+    expected_protocols:
+      - stp
+    expected_event_families:
+      - asset_observation
+      - topology_observation
+  - id: bootp-basic
+    archive_dir: BOOTP
+    path: BOOTP/DHCP.pcap
+    normalized_family: dhcp
+    min_events: 1
+    expected_protocols:
+      - dhcp
+    expected_event_families:
+      - protocol_transaction
+      - asset_observation
+  - id: dhcp-discover
+    archive_dir: DHCP
+    path: DHCP/dhcp-discover.pcap
+    normalized_family: dhcp
+    min_events: 1
+    expected_protocols:
+      - dhcp
+    expected_event_families:
+      - protocol_transaction
+      - asset_observation
+  - id: snmp-get-next
+    archive_dir: SNMP
+    path: SNMP/snmp-get-next.pcap
+    normalized_family: snmp
+    min_events: 1
+    expected_protocols:
+      - snmp
+    expected_event_families:
+      - protocol_transaction
+      - asset_observation
+  - id: http-basic
+    archive_dir: HTTP
+    path: HTTP/http.pcap
+    normalized_family: http
+    min_events: 1
+    expected_protocols:
+      - http
+    expected_event_families:
+      - protocol_transaction
+  - id: modbus-basic
+    archive_dir: MODBUS
+    path: MODBUS/Modbus.pcap
+    normalized_family: modbus
+    min_events: 1
+    expected_protocols:
+      - modbus
+    expected_event_families:
+      - protocol_transaction
+  - id: bacnet-ip
+    archive_dir: BacNET
+    path: BacNET/bacnet-ip.pcap
+    normalized_family: bacnet
+    min_events: 1
+    expected_protocols:
+      - bacnet
+    expected_event_families:
+      - protocol_transaction
+  - id: dnp3-read
+    archive_dir: DNP3
+    path: DNP3/dnp3_read.pcap
+    normalized_family: dnp3
+    min_events: 1
+    expected_protocols:
+      - dnp3
+    expected_event_families:
+      - protocol_transaction
+  - id: iec104-basic
+    archive_dir: IEC60870-104
+    path: IEC60870-104/iec104.pcap
+    normalized_family: iec104
+    min_events: 1
+    expected_protocols:
+      - iec104
+    expected_event_families:
+      - protocol_transaction
+  - id: omron-fins-basic
+    archive_dir: OMRON
+    path: OMRON/omron.pcap
+    normalized_family: omron_fins
+    min_events: 1
+    expected_protocols:
+      - omron_fins
+    expected_event_families:
+      - protocol_transaction
+  - id: hart-ip-basic
+    archive_dir: HART_IP
+    path: HART_IP/hart_ip.pcap
+    normalized_family: hart_ip
+    min_events: 1
+    expected_protocols:
+      - hart_ip
+    expected_event_families:
+      - protocol_transaction
+  - id: iec61850-mms
+    archive_dir: IEC61850
+    path: IEC61850/mms1.pcap
+    normalized_family: iec61850
+    min_events: 1
+    expected_protocols:
+      - iec61850
+    expected_event_families:
+      - protocol_transaction
+  - id: ethercat-basic
+    archive_dir: EtherCat
+    path: EtherCat/ethercat.pcap
+    normalized_family: ethercat
+    min_events: 1
+    expected_protocols:
+      - ethercat
+    expected_event_families:
+      - protocol_transaction
+  - id: enip-cip
+    archive_dir: Ethernet_IP
+    path: Ethernet_IP/EthernetIP-CIP.pcap
+    normalized_family: ethernet_ip
+    min_events: 1
+    expected_protocols:
+      - ethernet_ip
+    expected_event_families:
+      - protocol_transaction
+  - id: cip-alias
+    archive_dir: CIP
+    path: CIP/ENIP_CIP-CM.pcap
+    normalized_family: ethernet_ip
+    min_events: 1
+    expected_protocols:
+      - ethernet_ip
+    expected_event_families:
+      - protocol_transaction
+  - id: opcua-basic
+    archive_dir: OPC-UA
+    path: OPC-UA/opc.pcap
+    normalized_family: opc_ua
+    min_events: 1
+    expected_protocols:
+      - opc_ua
+    expected_event_families:
+      - protocol_transaction
+  - id: s7comm-basic
+    archive_dir: S7COMM
+    path: S7COMM/S7.pcap
+    normalized_family: s7comm
+    min_events: 1
+    expected_protocols:
+      - s7comm
+    expected_event_families:
+      - protocol_transaction
+  - id: profinet-basic
+    archive_dir: Profinet
+    path: Profinet/pro1.pcap
+    normalized_family: profinet
+    min_events: 1
+    expected_protocols:
+      - profinet
+    expected_event_families:
+      - protocol_transaction
