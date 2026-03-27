@@ -58,8 +58,12 @@ impl ProtocolDissector for S7commDissector {
         if src_port != S7COMM_PORT && dst_port != S7COMM_PORT {
             return false;
         }
-        // TPKT header starts with version 0x03 and needs enough data for TPKT + COTP + S7.
-        data.len() >= TPKT_HEADER_SIZE + 3 && data[0] == 0x03
+        if data.len() < TPKT_HEADER_SIZE + 3 || data[0] != 0x03 {
+            return false;
+        }
+        let cotp_length = data[TPKT_HEADER_SIZE] as usize;
+        let s7_offset = TPKT_HEADER_SIZE + 1 + cotp_length;
+        data.get(s7_offset).copied() == Some(S7_PROTOCOL_ID)
     }
 
     fn parse(&self, data: &[u8], _context: &PacketContext) -> Option<ProtocolData> {

@@ -5,6 +5,7 @@ use crate::registry::{OpcUaFields, PacketContext, ProtocolData, ProtocolDissecto
 pub struct OpcUaDissector;
 
 const OPC_UA_PORT: u16 = 4840;
+const OPC_UA_ALT_PORT: u16 = 12001;
 
 /// Minimum OPC UA message header: message_type(3) + chunk_type(1) + message_size(4) = 8 bytes.
 const MSG_HEADER_SIZE: usize = 8;
@@ -34,7 +35,11 @@ impl ProtocolDissector for OpcUaDissector {
     }
 
     fn can_parse(&self, data: &[u8], src_port: u16, dst_port: u16) -> bool {
-        if src_port != OPC_UA_PORT && dst_port != OPC_UA_PORT {
+        if src_port != OPC_UA_PORT
+            && dst_port != OPC_UA_PORT
+            && src_port != OPC_UA_ALT_PORT
+            && dst_port != OPC_UA_ALT_PORT
+        {
             return false;
         }
         // OPC UA binary messages start with a 3-byte ASCII type and need at least 8 bytes.
@@ -156,6 +161,13 @@ mod tests {
         let dissector = OpcUaDissector;
         let data = build_msg_header(b"HEL", b'F', 32);
         assert!(!dissector.can_parse(&data, 1111, 2222));
+    }
+
+    #[test]
+    fn can_parse_alternate_port() {
+        let dissector = OpcUaDissector;
+        let data = build_msg_header(b"HEL", b'F', 32);
+        assert!(dissector.can_parse(&data, 49500, OPC_UA_ALT_PORT));
     }
 
     #[test]

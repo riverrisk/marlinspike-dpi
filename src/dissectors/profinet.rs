@@ -36,6 +36,15 @@ fn classify_frame(frame_id: u16) -> &'static str {
     }
 }
 
+fn looks_like_profinet_frame(data: &[u8]) -> bool {
+    if data.len() < MIN_FRAME_SIZE {
+        return false;
+    }
+
+    let frame_id = u16::from_be_bytes([data[0], data[1]]);
+    classify_frame(frame_id) != "Unknown"
+}
+
 /// Returns a human-readable DCP service ID name.
 fn dcp_service_name(service_id: u8) -> &'static str {
     match service_id {
@@ -63,10 +72,15 @@ impl ProtocolDissector for ProfinetDissector {
     }
 
     fn can_parse(&self, data: &[u8], src_port: u16, dst_port: u16) -> bool {
-        if src_port != PROFINET_PORT && dst_port != PROFINET_PORT {
-            return false;
+        if src_port == PROFINET_PORT || dst_port == PROFINET_PORT {
+            return data.len() >= MIN_FRAME_SIZE;
         }
-        data.len() >= MIN_FRAME_SIZE
+
+        if src_port == 0 && dst_port == 0 {
+            return looks_like_profinet_frame(data);
+        }
+
+        false
     }
 
     fn parse(&self, data: &[u8], _context: &PacketContext) -> Option<ProtocolData> {
@@ -191,7 +205,7 @@ mod tests {
     fn parse_dcp_identify_request() {
         let dissector = ProfinetDissector;
         // Frame ID 0xFEFE = DCP Identify Request
-        let mut data = vec![
+        let data = vec![
             0xFE, 0xFE, // frame_id
             0x05, // service_id = Identify
             0x00, // service_type = Request
@@ -242,6 +256,46 @@ mod tests {
             assert_eq!(fields.frame_id, 0xFEFE);
             assert_eq!(fields.service_type, "DCP Identify Request");
             assert_eq!(fields.payload, vec![0x05]);
+        } else {
+            panic!("Expected Profinet protocol data");
+        }
+    }
+
+    #[test]
+    fn can_parse_raw_ethertype_dcp_frame() {
+        let dissector = ProfinetDissector;
+        let data = vec![
+            0xFE, 0xFE, // frame_id = DCP Identify Request
+            0x05, // service_id = Identify
+            0x00, // service_type = Request
+            0x01, 0x00, 0x00, 0x01, // xid
+            0x00, 0x01, // response delay
+            0x00, 0x04, // data_length = 4
+            0xFF, 0xFF, 0x00, 0x00, // DCP block header from the real corpus sample
+        ];
+
+        assert!(dissector.can_parse(&data, 0, 0));
+        assert!(!dissector.can_parse(&data, 1234, 5678));
+    }
+
+    #[test]
+    fn parse_raw_ethertype_dcp_identify_request() {
+        let dissector = ProfinetDissector;
+        let data = vec![
+            0xFE, 0xFE, // frame_id = DCP Identify Request
+            0x05, // service_id = Identify
+            0x00, // service_type = Request
+            0x01, 0x00, 0x00, 0x01, // xid
+            0x00, 0x01, // response delay
+            0x00, 0x04, // data_length = 4
+            0xFF, 0xFF, 0x00, 0x00, // block data
+        ];
+
+        let result = dissector.parse(&data, &ctx());
+        if let Some(ProtocolData::Profinet(fields)) = result {
+            assert_eq!(fields.frame_id, 0xFEFE);
+            assert_eq!(fields.service_type, "DCP Identify Request");
+            assert_eq!(fields.payload, vec![0xFF, 0xFF, 0x00, 0x00]);
         } else {
             panic!("Expected Profinet protocol data");
         }
