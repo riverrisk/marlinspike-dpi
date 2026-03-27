@@ -50,6 +50,12 @@ pub enum ProtocolData {
     Ftp(FtpFields),
     Ssh(SshFields),
     Radius(RadiusFields),
+    Vtp(VtpFields),
+    Mrp(MrpFields),
+    Mstp(MstpFields),
+    Pvst(PvstFields),
+    Prp(PrpFields),
+    Lacp(LacpFields),
 }
 
 impl ProtocolData {
@@ -83,6 +89,12 @@ impl ProtocolData {
             Self::Ftp(_) => "ftp",
             Self::Ssh(_) => "ssh",
             Self::Radius(_) => "radius",
+            Self::Vtp(_) => "vtp",
+            Self::Mrp(_) => "mrp",
+            Self::Mstp(_) => "mstp",
+            Self::Pvst(_) => "pvst",
+            Self::Prp(_) => "prp",
+            Self::Lacp(_) => "lacp",
         }
     }
 }
@@ -416,6 +428,92 @@ pub struct RadiusFields {
     pub service_type: Option<u32>,
 }
 
+#[derive(Debug, Clone)]
+pub struct VtpFields {
+    pub version: u8,
+    pub message_type: u8,
+    pub message_type_name: String,
+    pub domain_name: String,
+    pub revision: Option<u32>,
+    pub vlans: Vec<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MrpFields {
+    pub version: u16,
+    pub frame_type: u16,
+    pub frame_type_name: String,
+    pub domain_uuid: Option<String>,
+    pub ring_state: Option<String>,
+    pub priority: Option<u16>,
+    pub source_mac: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MstpFields {
+    pub protocol_version: u8,
+    pub bpdu_type: u8,
+    pub flags: u8,
+    pub root_id: String,
+    pub root_path_cost: u32,
+    pub bridge_id: String,
+    pub port_id: u16,
+    pub config_name: Option<String>,
+    pub revision_level: Option<u16>,
+    pub msti_records: Vec<MstiRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MstiRecord {
+    pub flags: u8,
+    pub regional_root: String,
+    pub internal_path_cost: u32,
+    pub bridge_priority: u8,
+    pub remaining_hops: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct PvstFields {
+    pub protocol_version: u8,
+    pub bpdu_type: u8,
+    pub flags: u8,
+    pub root_id: String,
+    pub root_path_cost: u32,
+    pub bridge_id: String,
+    pub port_id: u16,
+    pub originating_vlan: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrpFields {
+    pub supervision_path: u16,
+    pub supervision_version: u16,
+    pub supervision_type: u16,
+    pub supervision_type_name: String,
+    pub source_mac: Option<String>,
+    pub red_box_mac: Option<String>,
+    pub sequence_nr: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LacpFields {
+    pub version: u8,
+    pub actor: LacpPartner,
+    pub partner: LacpPartner,
+    pub max_delay: Option<u16>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LacpPartner {
+    pub system_priority: u16,
+    pub system: String,
+    pub key: u16,
+    pub port_priority: u16,
+    pub port: u16,
+    pub state: u8,
+    pub state_flags: Vec<String>,
+}
+
 // ── Trait + Registry ───────────────────────────────────────────
 
 /// Trait implemented by each protocol dissector.
@@ -473,6 +571,12 @@ impl DissectorRegistry {
         reg.register(Box::new(ftp::FtpDissector));
         reg.register(Box::new(ssh::SshDissector));
         reg.register(Box::new(radius::RadiusDissector));
+        reg.register(Box::new(vtp::VtpDissector));
+        reg.register(Box::new(mrp::MrpDissector));
+        reg.register(Box::new(mstp::MstpDissector));
+        reg.register(Box::new(pvst::PvstDissector));
+        reg.register(Box::new(prp::PrpDissector));
+        reg.register(Box::new(lacp::LacpDissector));
         reg
     }
 

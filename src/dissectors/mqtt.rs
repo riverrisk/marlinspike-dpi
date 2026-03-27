@@ -135,7 +135,8 @@ impl MqttDissector {
                     }
                     // Will payload
                     if rest.len() > offset + 2 {
-                        let wp_len = u16::from_be_bytes([rest[offset], rest[offset + 1]]) as usize;
+                        let wp_len =
+                            u16::from_be_bytes([rest[offset], rest[offset + 1]]) as usize;
                         offset += 2 + wp_len;
                     }
                 }

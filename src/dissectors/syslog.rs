@@ -114,7 +114,10 @@ fn parse_rfc3164(text: &str) -> (Option<String>, Option<String>, Option<String>)
             .map_or(app_raw, |i| &app_raw[..i])
             .to_string();
         let msg = remainder[colon_pos + 1..].trim().to_string();
-        (Some(app), if msg.is_empty() { None } else { Some(msg) })
+        (
+            Some(app),
+            if msg.is_empty() { None } else { Some(msg) },
+        )
     } else {
         (None, Some(remainder.to_string()))
     };
@@ -135,7 +138,11 @@ fn parse_rfc5424(text: &str) -> (Option<String>, Option<String>, Option<String>)
 }
 
 fn nilvalue(s: &str) -> Option<String> {
-    if s == "-" { None } else { Some(s.to_string()) }
+    if s == "-" {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 fn skip_bsd_timestamp(text: &str) -> &str {
@@ -194,7 +201,10 @@ mod tests {
         assert_eq!(fields.severity_name, "info");
         assert_eq!(fields.hostname.as_deref(), Some("plc-gw01"));
         assert_eq!(fields.app_name.as_deref(), Some("sshd"));
-        assert_eq!(fields.message.as_deref(), Some("Accepted key for operator"));
+        assert_eq!(
+            fields.message.as_deref(),
+            Some("Accepted key for operator")
+        );
     }
 
     #[test]

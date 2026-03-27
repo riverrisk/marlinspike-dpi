@@ -99,15 +99,18 @@ impl RadiusDissector {
                 }
                 30 => {
                     // Called-Station-Id
-                    fields.called_station_id = Some(String::from_utf8_lossy(value).to_string());
+                    fields.called_station_id =
+                        Some(String::from_utf8_lossy(value).to_string());
                 }
                 31 => {
                     // Calling-Station-Id
-                    fields.calling_station_id = Some(String::from_utf8_lossy(value).to_string());
+                    fields.calling_station_id =
+                        Some(String::from_utf8_lossy(value).to_string());
                 }
                 32 => {
                     // NAS-Identifier
-                    fields.nas_identifier = Some(String::from_utf8_lossy(value).to_string());
+                    fields.nas_identifier =
+                        Some(String::from_utf8_lossy(value).to_string());
                 }
                 61 => {
                     // NAS-Port-Type
