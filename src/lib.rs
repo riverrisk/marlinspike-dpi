@@ -28,8 +28,10 @@ pub mod bronze;
 pub mod corpus;
 pub mod dedup;
 pub mod dissectors;
+pub mod bilgepump;
 pub mod engine;
 pub mod registry;
+pub mod stovetop;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;

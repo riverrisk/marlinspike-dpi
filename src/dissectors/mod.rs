@@ -29,6 +29,8 @@ pub mod tcp;
 pub mod udp;
 pub mod vtp;
 
+pub mod icmp;
+
 // OT protocol dissectors
 pub mod dnp3;
 pub mod ethernet_ip;
