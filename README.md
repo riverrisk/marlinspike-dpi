@@ -4,17 +4,30 @@ Pure-Rust deep packet inspection engine for OT/ICS and IT network monitoring.
 
 Consumes passive packet captures (PCAP / PCAPNG) and emits structured Bronze v2 events: protocol transactions, asset observations, topology observations, parse anomalies, and extracted artifacts. No libpcap, no C dependencies.
 
-Usable as:
+**34 protocol dissectors. 21 anomaly detection signatures. Zero C dependencies.**
 
-- a **Rust library** (`fm_dpi`)
-- a **CLI binary** (`marlinspike-dpi`)
-- an optional **C FFI** surface (feature `ffi`)
+Three detection subsystems beyond protocol parsing:
+- **Stovetop** -- frame-level integrity: padding covert channels, runt/oversized frames, CRC validation
+- **ICMPeeker** -- ICMP threat detection: routing manipulation, tunnel detection, recon fingerprinting
+- **Bilgepump** -- stateful L2 monitoring: ARP spoofing, VLAN hopping, STP hijacking, rogue DHCP, identity conflicts
+
+Usable as a **Rust library** (`fm_dpi`), a **CLI binary** (`marlinspike-dpi`), or an optional **C FFI** surface (feature `ffi`).
+
+### What Sets This Apart
+
+- **Pure Rust, zero C dependencies.** No libpcap, no libc FFI, no bindgen. The entire stack from PCAP parsing to CRC-32 validation is safe, auditable Rust. Builds anywhere `rustc` runs.
+- **OT/ICS protocol depth.** 16 industrial protocols parsed to application layer -- Modbus, DNP3, IEC 104, IEC 61850 (GOOSE + SV + MMS), S7comm, PROFINET, BACnet, EtherNet/IP, OPC UA, HART-IP, FINS, EtherCAT, MRP, PRP. Not just port identification -- full PDU parsing with function codes, register values, and device identity extraction.
+- **Frame-level integrity inspection (Stovetop).** Every frame is checked for structural anomalies before protocol dissection: runt/oversized detection, Ethernet padding entropy analysis for covert channel detection, FCS CRC-32 validation, DNP3 DLL CRC-16 validation, and capture truncation flagging using preserved `orig_len`.
+- **ICMP threat detection (ICMPeeker).** ICMP redirect detection for routing manipulation attacks. Echo payload entropy analysis for covert tunnel detection (icmpsh, ptunnel). Suspicious type flagging for router advertisement injection, timestamp/address-mask recon.
+- **Stateful L2 monitoring (Bilgepump).** Cross-frame state accumulation for temporal anomaly detection: ARP cache poisoning via MAC/IP binding changes, VLAN hopping via double-tagged 802.1Q analysis, STP root hijacking with whitelist enforcement, rogue DHCP server detection, LLDP/CDP identity conflict tracking, MAC flapping and locally-administered bit detection.
+- **Structured Bronze v2 event model.** Five event families (ProtocolTransaction, AssetObservation, TopologyObservation, ParseAnomaly, ExtractedArtifact) with full packet context in every envelope. Anomaly detections carry decoder tags (`stovetop:*`, `icmpeeker:*`, `bilgepump:*`) for downstream routing.
+- **Built-in deduplication.** SHA256-based sliding-window dedup for multi-collector deployments. 5-second window, 1-second quantization. Protocol events and anomaly findings dedup independently.
+- **Embeddable.** `DpiEngine::new()` gives you a ready-to-use engine in one line. No configuration files, no runtime dependencies, no daemon. Process a capture, get structured events back.
+- **247 tests.** Unit tests for every dissector and detector. Integration tests for full-pipeline capture processing. Zero ignored, zero flaky.
 
 ---
 
 ## Signature Set
-
-**34 protocol dissectors**, frame-level integrity inspection, and ICMP anomaly detection across OT/ICS, IT, and L2 layers.
 
 ### OT / ICS Protocols
 
@@ -103,9 +116,9 @@ The **icmpeeker** module (`src/icmpeeker.rs`) inspects ICMP packets for maliciou
 | ICMP Tunnel | `icmpeeker:tunnel` | High | Echo Request/Reply (types 0, 8) with payloads >= 64 bytes and Shannon entropy > 6.0. Detects covert channels using tools like icmpsh, ptunnel, or custom ICMP tunnels. Normal pings have predictable low-entropy padding. |
 | Suspicious ICMP type | `icmpeeker:suspicious` | Medium/High | Router Advertisement (type 9), Router Solicitation (type 10) — rogue router injection. Timestamp Request/Reply (types 13/14), Address Mask Request/Reply (types 17/18) — host fingerprinting and subnet discovery via deprecated types. |
 
-### Configuration
+### Stovetop Configuration
 
-All checks are enabled by default. Each check can be individually toggled via `StovetopConfig`:
+All stovetop checks are enabled by default:
 
 ```rust
 use fm_dpi::stovetop::config::StovetopConfig;
@@ -114,6 +127,21 @@ let mut config = StovetopConfig::default();
 config.check_padding = false;           // disable padding inspection
 config.padding_entropy_threshold = 3.0; // adjust covert channel sensitivity
 config.max_ethernet_frame = 9018;       // jumbo frames are expected
+```
+
+### ICMPeeker Configuration
+
+All ICMPeeker checks are enabled by default:
+
+```rust
+use fm_dpi::icmpeeker::IcmpeekerConfig;
+
+let mut config = IcmpeekerConfig::default();
+config.check_redirects = true;          // ICMP redirect detection
+config.check_tunnels = true;            // covert channel via echo payloads
+config.check_suspicious_types = true;   // deprecated/recon ICMP types
+config.tunnel_min_payload = 64;         // minimum echo payload for tunnel check
+config.tunnel_entropy_threshold = 6.0;  // Shannon entropy threshold (0.0-8.0)
 ```
 
 ---
@@ -226,7 +254,7 @@ Every event carries full packet context: timestamp, src/dst MAC, src/dst IP, src
 
 Multi-collector deployments produce overlapping captures. The engine deduplicates using SHA256 over `(quantized_timestamp, src_ip, dst_ip, src_port, dst_port, family_key)` with a 5-second sliding window and 1-second quantization bucket.
 
-Stovetop findings dedup independently from protocol events using their `stovetop:*` decoder prefix as part of the family key.
+All subsystems dedup independently using their decoder prefix as part of the family key (`stovetop:*`, `icmpeeker:*`, `bilgepump:*`).
 
 ## Supported Inputs
 
