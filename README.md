@@ -288,7 +288,7 @@ Output envelope:
 ```json
 {
   "engine": "marlinspike-dpi",
-  "version": "0.6.0",
+  "version": "1.0.0",
   "input": { "path": "...", "capture_id": "...", "size_bytes": 12345 },
   "output": {
     "checkpoint": {
