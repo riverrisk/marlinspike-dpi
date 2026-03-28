@@ -13,6 +13,5 @@
 pub mod config;
 pub mod findings;
 pub mod frame_inspector;
-pub mod icmp;
 pub mod integrity;
 pub mod padding;

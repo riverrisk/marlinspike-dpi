@@ -1,8 +1,12 @@
-//! ICMP anomaly detection — routing manipulation, tunneling, recon, and abuse.
+//! ICMPeeker — ICMP anomaly detection for routing manipulation, tunneling, and recon.
+//!
+//! Inspects ICMP packets for malicious patterns that protocol-level dissection
+//! alone cannot flag. Runs post-decoder alongside the ICMP dissector: the
+//! dissector provides protocol visibility (ProtocolTransaction), ICMPeeker
+//! provides the threat signal (ParseAnomaly).
 
-use super::config::StovetopConfig;
-use super::findings::{FindingKind, FindingSeverity, FrameFinding};
-use super::padding::shannon_entropy;
+use crate::stovetop::findings::{FindingKind, FindingSeverity, FrameFinding};
+use crate::stovetop::padding::shannon_entropy;
 
 /// ICMP type constants.
 const ICMP_ECHO_REPLY: u8 = 0;
@@ -21,14 +25,44 @@ const TUNNEL_MIN_PAYLOAD: usize = 64;
 /// Entropy threshold for echo payloads — above this is suspicious.
 const TUNNEL_ENTROPY_THRESHOLD: f64 = 6.0;
 
+/// Configuration for ICMPeeker anomaly detection.
+#[derive(Debug, Clone)]
+pub struct IcmpeekerConfig {
+    /// Master enable switch.
+    pub enabled: bool,
+    /// Flag ICMP redirect messages (routing manipulation).
+    pub check_redirects: bool,
+    /// Flag high-entropy echo payloads (tunnel detection).
+    pub check_tunnels: bool,
+    /// Flag deprecated/suspicious ICMP types (recon/fingerprinting).
+    pub check_suspicious_types: bool,
+    /// Minimum echo payload size for tunnel analysis (bytes).
+    pub tunnel_min_payload: usize,
+    /// Shannon entropy threshold for tunnel detection (0.0-8.0).
+    pub tunnel_entropy_threshold: f64,
+}
+
+impl Default for IcmpeekerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            check_redirects: true,
+            check_tunnels: true,
+            check_suspicious_types: true,
+            tunnel_min_payload: TUNNEL_MIN_PAYLOAD,
+            tunnel_entropy_threshold: TUNNEL_ENTROPY_THRESHOLD,
+        }
+    }
+}
+
 /// Inspect an ICMP packet for anomalies.
 ///
 /// `icmp_payload` starts at the ICMP header (type, code, checksum, ...).
-pub fn inspect_icmp(
-    config: &StovetopConfig,
+pub fn inspect(
+    config: &IcmpeekerConfig,
     icmp_payload: &[u8],
 ) -> Vec<FrameFinding> {
-    if !config.check_icmp_anomalies || icmp_payload.len() < 4 {
+    if !config.enabled || icmp_payload.len() < 4 {
         return Vec::new();
     }
 
@@ -37,7 +71,7 @@ pub fn inspect_icmp(
     let icmp_code = icmp_payload[1];
 
     // ICMP Redirect — routing manipulation
-    if icmp_type == ICMP_REDIRECT {
+    if config.check_redirects && icmp_type == ICMP_REDIRECT {
         let gateway_ip = if icmp_payload.len() >= 8 {
             format!(
                 "{}.{}.{}.{}",
@@ -53,18 +87,20 @@ pub fn inspect_icmp(
                 gateway_ip,
             },
             severity: FindingSeverity::Critical,
-            decoder: "stovetop:icmp_redirect",
+            decoder: "icmpeeker:redirect",
         });
     }
 
     // ICMP Echo tunnel detection
-    if icmp_type == ICMP_ECHO_REQUEST || icmp_type == ICMP_ECHO_REPLY {
+    if config.check_tunnels
+        && (icmp_type == ICMP_ECHO_REQUEST || icmp_type == ICMP_ECHO_REPLY)
+    {
         // Echo header: type(1) + code(1) + checksum(2) + id(2) + seq(2) = 8 bytes
         if icmp_payload.len() > 8 {
             let echo_data = &icmp_payload[8..];
-            if echo_data.len() >= TUNNEL_MIN_PAYLOAD {
+            if echo_data.len() >= config.tunnel_min_payload {
                 let entropy = shannon_entropy(echo_data);
-                if entropy > TUNNEL_ENTROPY_THRESHOLD {
+                if entropy > config.tunnel_entropy_threshold {
                     findings.push(FrameFinding {
                         kind: FindingKind::IcmpTunnel {
                             icmp_type,
@@ -72,7 +108,7 @@ pub fn inspect_icmp(
                             entropy,
                         },
                         severity: FindingSeverity::High,
-                        decoder: "stovetop:icmp_tunnel",
+                        decoder: "icmpeeker:tunnel",
                     });
                 }
             }
@@ -80,7 +116,9 @@ pub fn inspect_icmp(
     }
 
     // Router advertisement / solicitation — rogue router injection
-    if icmp_type == ICMP_ROUTER_ADVERTISEMENT || icmp_type == ICMP_ROUTER_SOLICITATION {
+    if config.check_suspicious_types
+        && (icmp_type == ICMP_ROUTER_ADVERTISEMENT || icmp_type == ICMP_ROUTER_SOLICITATION)
+    {
         findings.push(FrameFinding {
             kind: FindingKind::IcmpSuspiciousType {
                 icmp_type,
@@ -88,18 +126,20 @@ pub fn inspect_icmp(
                 type_name: icmp_type_name(icmp_type).to_string(),
             },
             severity: FindingSeverity::High,
-            decoder: "stovetop:icmp_suspicious",
+            decoder: "icmpeeker:suspicious",
         });
     }
 
     // Deprecated types — info leakage / fingerprinting
-    if matches!(
-        icmp_type,
-        ICMP_TIMESTAMP_REQUEST
-            | ICMP_TIMESTAMP_REPLY
-            | ICMP_ADDRESS_MASK_REQUEST
-            | ICMP_ADDRESS_MASK_REPLY
-    ) {
+    if config.check_suspicious_types
+        && matches!(
+            icmp_type,
+            ICMP_TIMESTAMP_REQUEST
+                | ICMP_TIMESTAMP_REPLY
+                | ICMP_ADDRESS_MASK_REQUEST
+                | ICMP_ADDRESS_MASK_REPLY
+        )
+    {
         findings.push(FrameFinding {
             kind: FindingKind::IcmpSuspiciousType {
                 icmp_type,
@@ -107,7 +147,7 @@ pub fn inspect_icmp(
                 type_name: icmp_type_name(icmp_type).to_string(),
             },
             severity: FindingSeverity::Medium,
-            decoder: "stovetop:icmp_suspicious",
+            decoder: "icmpeeker:suspicious",
         });
     }
 
@@ -134,55 +174,20 @@ pub fn icmp_type_name(icmp_type: u8) -> &'static str {
     }
 }
 
-/// Human-readable ICMP destination unreachable code name.
-pub fn icmp_unreachable_code_name(code: u8) -> &'static str {
-    match code {
-        0 => "Network Unreachable",
-        1 => "Host Unreachable",
-        2 => "Protocol Unreachable",
-        3 => "Port Unreachable",
-        4 => "Fragmentation Needed",
-        5 => "Source Route Failed",
-        6 => "Destination Network Unknown",
-        7 => "Destination Host Unknown",
-        8 => "Source Host Isolated",
-        9 => "Network Administratively Prohibited",
-        10 => "Host Administratively Prohibited",
-        11 => "Network Unreachable for ToS",
-        12 => "Host Unreachable for ToS",
-        13 => "Communication Administratively Prohibited",
-        _ => "Unknown",
-    }
-}
-
-/// Human-readable ICMP redirect code name.
-pub fn icmp_redirect_code_name(code: u8) -> &'static str {
-    match code {
-        0 => "Redirect for Network",
-        1 => "Redirect for Host",
-        2 => "Redirect for ToS and Network",
-        3 => "Redirect for ToS and Host",
-        _ => "Unknown",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn default_config() -> StovetopConfig {
-        StovetopConfig::default()
+    fn default_config() -> IcmpeekerConfig {
+        IcmpeekerConfig::default()
     }
 
     #[test]
     fn detect_icmp_redirect() {
         let config = default_config();
-        // Type 5 (redirect), code 1, checksum(2), gateway IP 10.0.0.1
         let icmp = vec![5, 1, 0, 0, 10, 0, 0, 1];
-        let findings = inspect_icmp(&config, &icmp);
-        assert!(findings
-            .iter()
-            .any(|f| f.decoder == "stovetop:icmp_redirect"));
+        let findings = inspect(&config, &icmp);
+        assert!(findings.iter().any(|f| f.decoder == "icmpeeker:redirect"));
         if let FindingKind::IcmpRedirect { gateway_ip, .. } = &findings[0].kind {
             assert_eq!(gateway_ip, "10.0.0.1");
         } else {
@@ -193,17 +198,13 @@ mod tests {
     #[test]
     fn detect_icmp_tunnel() {
         let config = default_config();
-        // Echo request with high-entropy payload
-        let mut icmp = vec![8, 0, 0, 0, 0, 1, 0, 1]; // type 8, id=1, seq=1
-        // Append 128 bytes of pseudo-random data (high entropy)
+        let mut icmp = vec![8, 0, 0, 0, 0, 1, 0, 1];
         for i in 0..128u8 {
             icmp.push(i.wrapping_mul(137).wrapping_add(43));
         }
-        let findings = inspect_icmp(&config, &icmp);
+        let findings = inspect(&config, &icmp);
         assert!(
-            findings
-                .iter()
-                .any(|f| f.decoder == "stovetop:icmp_tunnel"),
+            findings.iter().any(|f| f.decoder == "icmpeeker:tunnel"),
             "expected tunnel finding for high-entropy echo payload"
         );
     }
@@ -211,14 +212,11 @@ mod tests {
     #[test]
     fn no_tunnel_for_normal_ping() {
         let config = default_config();
-        // Echo request with all-zero payload (normal padding)
         let mut icmp = vec![8, 0, 0, 0, 0, 1, 0, 1];
         icmp.extend_from_slice(&[0u8; 64]);
-        let findings = inspect_icmp(&config, &icmp);
+        let findings = inspect(&config, &icmp);
         assert!(
-            !findings
-                .iter()
-                .any(|f| f.decoder == "stovetop:icmp_tunnel"),
+            !findings.iter().any(|f| f.decoder == "icmpeeker:tunnel"),
             "should not flag zero-payload ping as tunnel"
         );
     }
@@ -227,38 +225,32 @@ mod tests {
     fn detect_router_advertisement() {
         let config = default_config();
         let icmp = vec![9, 0, 0, 0];
-        let findings = inspect_icmp(&config, &icmp);
-        assert!(findings
-            .iter()
-            .any(|f| f.decoder == "stovetop:icmp_suspicious"));
+        let findings = inspect(&config, &icmp);
+        assert!(findings.iter().any(|f| f.decoder == "icmpeeker:suspicious"));
     }
 
     #[test]
     fn detect_timestamp_request() {
         let config = default_config();
         let icmp = vec![13, 0, 0, 0];
-        let findings = inspect_icmp(&config, &icmp);
-        assert!(findings
-            .iter()
-            .any(|f| f.decoder == "stovetop:icmp_suspicious"));
+        let findings = inspect(&config, &icmp);
+        assert!(findings.iter().any(|f| f.decoder == "icmpeeker:suspicious"));
     }
 
     #[test]
     fn detect_address_mask_request() {
         let config = default_config();
         let icmp = vec![17, 0, 0, 0];
-        let findings = inspect_icmp(&config, &icmp);
-        assert!(findings
-            .iter()
-            .any(|f| f.decoder == "stovetop:icmp_suspicious"));
+        let findings = inspect(&config, &icmp);
+        assert!(findings.iter().any(|f| f.decoder == "icmpeeker:suspicious"));
     }
 
     #[test]
     fn disabled_returns_nothing() {
         let mut config = default_config();
-        config.check_icmp_anomalies = false;
-        let icmp = vec![5, 1, 0, 0, 10, 0, 0, 1]; // redirect
-        let findings = inspect_icmp(&config, &icmp);
+        config.enabled = false;
+        let icmp = vec![5, 1, 0, 0, 10, 0, 0, 1];
+        let findings = inspect(&config, &icmp);
         assert!(findings.is_empty());
     }
 }

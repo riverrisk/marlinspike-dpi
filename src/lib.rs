@@ -30,6 +30,7 @@ pub mod dedup;
 pub mod dissectors;
 pub mod bilgepump;
 pub mod engine;
+pub mod icmpeeker;
 pub mod registry;
 pub mod stovetop;
 

@@ -91,13 +91,17 @@ The **stovetop** module (`src/stovetop/`) inspects every frame for structural an
 |-------|-------------|----------|-----------------|
 | DNP3 DLL CRC-16 | `stovetop:integrity` | High | Validates CRC-16 on DNP3 data-link-layer header and user-data blocks. CRC mismatches indicate data corruption, man-in-the-middle modification, or replay of tampered frames. Uses the DNP3 polynomial (0x3D65 reflected). |
 
-### ICMP Anomaly Detection
+---
+
+## ICMPeeker: ICMP Anomaly Detection
+
+The **icmpeeker** module (`src/icmpeeker.rs`) inspects ICMP packets for malicious patterns. Runs post-decoder alongside the ICMP protocol dissector: the dissector provides protocol visibility (`ProtocolTransaction`), ICMPeeker provides the threat signal (`ParseAnomaly`).
 
 | Check | Decoder Tag | Severity | What It Catches |
 |-------|-------------|----------|-----------------|
-| ICMP Redirect | `stovetop:icmp_redirect` | Critical | Type 5 messages that instruct hosts to reroute traffic through an attacker-controlled gateway. Should never appear on OT/ICS networks. Extracts gateway IP for investigation. |
-| ICMP Tunnel | `stovetop:icmp_tunnel` | High | Echo Request/Reply (types 0, 8) with payloads >= 64 bytes and Shannon entropy > 6.0. Detects covert channels using tools like icmpsh, ptunnel, or custom ICMP tunnels. Normal pings have predictable low-entropy padding. |
-| Suspicious ICMP type | `stovetop:icmp_suspicious` | Medium/High | Router Advertisement (type 9), Router Solicitation (type 10) — rogue router injection. Timestamp Request/Reply (types 13/14), Address Mask Request/Reply (types 17/18) — host fingerprinting and subnet discovery via deprecated types. |
+| ICMP Redirect | `icmpeeker:redirect` | Critical | Type 5 messages that instruct hosts to reroute traffic through an attacker-controlled gateway. Should never appear on OT/ICS networks. Extracts gateway IP for investigation. |
+| ICMP Tunnel | `icmpeeker:tunnel` | High | Echo Request/Reply (types 0, 8) with payloads >= 64 bytes and Shannon entropy > 6.0. Detects covert channels using tools like icmpsh, ptunnel, or custom ICMP tunnels. Normal pings have predictable low-entropy padding. |
+| Suspicious ICMP type | `icmpeeker:suspicious` | Medium/High | Router Advertisement (type 9), Router Solicitation (type 10) — rogue router injection. Timestamp Request/Reply (types 13/14), Address Mask Request/Reply (types 17/18) — host fingerprinting and subnet discovery via deprecated types. |
 
 ### Configuration
 
@@ -341,16 +345,18 @@ Iron (PCAP/PCAPNG bytes)
   -> route to decoders by DecoderInterest (EtherType, TcpPort, UdpPort, IpProto, LLC, SNAP)
   -> decoder calls dissector.parse(), synthesizes BronzeEvent(s)
   -> bilgepump post-decoder: stateful L2 analysis (ARP spoof, STP root, DHCP abuse, identity)
-  -> stovetop per-dissector: protocol integrity checks (DNP3 CRC, ICMP anomalies)
+  -> icmpeeker: ICMP anomaly detection (redirects, tunnels, suspicious types)
+  -> stovetop per-dissector: protocol integrity checks (DNP3 CRC)
   -> SHA256 dedup filter (5s window)
   -> batch (256 events) -> output
 ```
 
-Four-tier design:
+Five-tier design:
 
 - **Dissectors** (`src/dissectors/*.rs`) -- stateless protocol parsers implementing `ProtocolDissector` trait. Extract binary fields from payload bytes.
 - **Decoders** (`src/engine.rs`) -- stateful session managers implementing `SessionDecoder` trait. Correlate request/response pairs, manage session state, emit Bronze events.
-- **Stovetop** (`src/stovetop/*.rs`) -- frame-level and protocol-level integrity inspector. Runs pre-dissector and per-dissector, emits `ParseAnomaly` events for structural anomalies, covert channels, and ICMP abuse.
+- **Stovetop** (`src/stovetop/*.rs`) -- frame-level and protocol-level integrity inspector. Runs pre-dissector, emits `ParseAnomaly` events for structural anomalies (runt, padding, FCS, CRC).
+- **ICMPeeker** (`src/icmpeeker.rs`) -- ICMP-specific anomaly detector. Flags routing manipulation (redirects), covert channels (tunnel entropy), and recon (deprecated types).
 - **Bilgepump** (`src/bilgepump/*.rs`) -- stateful L2 monitor. Accumulates MAC/IP bindings, STP root history, DHCP server identity, and device identities across frames. Detects temporal anomalies: ARP spoofing, VLAN hopping, STP manipulation, rogue DHCP, identity conflicts.
 
 ```
@@ -397,7 +403,7 @@ src/
     frame_inspector.rs FrameInspector — pre-dissector hook (runt, oversized, truncation, padding, FCS)
     padding.rs         Ethernet padding extraction, Shannon entropy, non-zero fill detection
     integrity.rs       CRC validation — Ethernet CRC-32, DNP3 CRC-16
-    icmp.rs            ICMP anomaly detection — redirects, tunnels, suspicious types
+  icmpeeker.rs         ICMP anomaly detection — redirects, tunnels, suspicious types
   bilgepump/           Stateful L2 monitoring
     mod.rs             Module root
     config.rs          BilgepumpConfig — thresholds, blessed bindings, whitelists
