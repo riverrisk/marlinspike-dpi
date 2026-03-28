@@ -14,7 +14,13 @@ use crate::bronze::{
     ExtractedArtifact, ObjectValue, ParseAnomaly, ProtocolTransaction, SegmentCheckpoint,
     TopologyObservation, TransportProtocol, BRONZE_SCHEMA_VERSION,
 };
+use crate::bilgepump::alerts::BilgepumpAlert;
+use crate::bilgepump::config::BilgepumpConfig;
+use crate::bilgepump::monitor::BilgepumpMonitor;
 use crate::dedup::DedupEngine;
+use crate::stovetop::config::StovetopConfig;
+use crate::stovetop::findings::FrameFinding;
+use crate::stovetop::frame_inspector::FrameInspector;
 use crate::dissectors::{
     arp::ArpDissector,
     bacnet::BacnetDissector,
@@ -52,12 +58,13 @@ use crate::dissectors::{
     vtp::VtpDissector,
 };
 use crate::dissectors::ftp::FtpDissector;
+use crate::dissectors::icmp::IcmpDissector;
 use crate::registry::{
     format_mac, ArpFields, BacnetFields, CdpFields, DhcpFields, Dnp3Fields, DnsFields,
-    EthernetIpFields, FtpFields, HttpFields, Iec104Fields, LacpFields, LacpPartner, LldpFields,
-    ModbusFields, MqttFields, MrpFields, MstpFields, NtpFields, OmronFinsFields, OpcUaFields,
-    PacketContext, ProfinetFields, ProtocolData, ProtocolDissector, PrpFields, PvstFields,
-    RadiusFields, S7commFields, SnmpFields, SshFields, StpFields, SyslogFields, VtpFields,
+    EthernetIpFields, FtpFields, HttpFields, Iec104Fields, LacpFields, LldpFields, ModbusFields,
+    MqttFields, MrpFields, NtpFields, OmronFinsFields, OpcUaFields, PacketContext,
+    ProfinetFields, ProtocolData, ProtocolDissector, PrpFields, PvstFields, RadiusFields,
+    S7commFields, SnmpFields, SshFields, StpFields, SyslogFields, VtpFields,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +119,7 @@ pub enum DecoderInterest {
     EtherType(u16),
     TcpPort(u16),
     UdpPort(u16),
+    IpProto(u8),
     Llc { dsap: u8, ssap: u8 },
     Snap { oui: [u8; 3], pid: u16 },
 }
@@ -133,6 +141,7 @@ struct StreamChunk<'a> {
     timestamp: DateTime<Utc>,
     context: PacketContext,
     ethertype: u16,
+    ip_proto: Option<u8>,
     llc: Option<LlcInfo>,
     transport: TransportProtocol,
     payload: &'a [u8],
@@ -160,10 +169,14 @@ pub struct DpiEngine {
     dedup: DedupEngine,
     decoders: Vec<Box<dyn SessionDecoder>>,
     batch_size: usize,
+    frame_inspector: FrameInspector,
+    stovetop_config: StovetopConfig,
+    bilgepump: BilgepumpMonitor,
 }
 
 impl DpiEngine {
     pub fn new() -> Self {
+        let stovetop_config = StovetopConfig::default();
         Self {
             dedup: DedupEngine::new(
                 std::time::Duration::from_secs(5),
@@ -203,7 +216,11 @@ impl DpiEngine {
                 Box::new(PvstDecoder::default()),
                 Box::new(PrpDecoder::default()),
                 Box::new(LacpDecoder::default()),
+                Box::new(IcmpDecoder::default()),
             ],
+            frame_inspector: FrameInspector::new(stovetop_config.clone()),
+            stovetop_config,
+            bilgepump: BilgepumpMonitor::new(BilgepumpConfig::default()),
             batch_size: 256,
         }
     }
@@ -255,6 +272,7 @@ impl DpiEngine {
                 frames_processed,
                 packet.timestamp,
                 packet.captured_len,
+                packet.orig_len,
                 &packet.data,
             )?;
             if let Some(ts) = frame_events.first().map(|event| event.envelope.timestamp) {
@@ -287,6 +305,7 @@ impl DpiEngine {
             decoder.on_idle_flush(last_timestamp, &mut pending_events);
             decoder.evict_idle(last_timestamp, &mut pending_events);
         }
+        self.bilgepump.evict_expired(last_timestamp);
 
         let final_pending = pending_events.len() as u64;
         if !pending_events.is_empty() {
@@ -336,6 +355,7 @@ impl DpiEngine {
         frame_index: u64,
         timestamp: DateTime<Utc>,
         captured_len: usize,
+        orig_len: u32,
         pkt_data: &[u8],
     ) -> Result<Vec<BronzeEvent>, DpiError> {
         let timestamp_ns = timestamp
@@ -408,6 +428,46 @@ impl DpiEngine {
 
         let mut out = Vec::new();
 
+        // Stovetop: pre-dissector frame-level inspection
+        let ethernet_header_len = pkt_data.len() - l2_payload.len();
+        let frame_findings = self.frame_inspector.inspect_frame(
+            pkt_data,
+            captured_len,
+            orig_len,
+            ethertype,
+            l2_payload,
+            ethernet_header_len,
+        );
+        for finding in &frame_findings {
+            out.push(stovetop_finding_to_event_raw(
+                finding,
+                &meta.capture_id,
+                interface_id,
+                frame_index,
+                timestamp,
+                segment_hash,
+                &base_context,
+                captured_len as u64,
+                pkt_data,
+            ));
+        }
+
+        // Bilgepump: pre-VLAN L2 frame inspection (VLAN hopping, MAC anomalies)
+        let l2_alerts = self.bilgepump.inspect_l2_frame(pkt_data, &src_mac);
+        for alert in &l2_alerts {
+            out.push(bilgepump_alert_to_event(
+                alert,
+                &meta.capture_id,
+                interface_id,
+                frame_index,
+                timestamp,
+                segment_hash,
+                &base_context,
+                captured_len as u64,
+                pkt_data,
+            ));
+        }
+
         match ethertype {
             0x0806 | 0x88CC => {
                 let chunk = StreamChunk {
@@ -418,6 +478,7 @@ impl DpiEngine {
                     timestamp,
                     context: base_context,
                     ethertype,
+                    ip_proto: None,
                     llc: None,
                     transport: if ethertype == 0x0806 {
                         TransportProtocol::Arp
@@ -436,6 +497,57 @@ impl DpiEngine {
                 for decoder in &mut self.decoders {
                     if interest_matches(decoder.interest(), &chunk) {
                         decoder.on_datagram(&chunk, &mut out);
+                    }
+                }
+
+                // Bilgepump: stateful L2 observation for ARP and LLDP
+                if ethertype == 0x0806 {
+                    use crate::dissectors::arp::ArpDissector;
+                    use crate::registry::ProtocolDissector as _;
+                    let arp_d = ArpDissector;
+                    if let Some(ProtocolData::Arp(ref fields)) =
+                        arp_d.parse(l2_payload, &chunk.context)
+                    {
+                        let bp_alerts = self.bilgepump.observe_arp(
+                            fields, &src_mac, vlan_id, timestamp,
+                        );
+                        for alert in &bp_alerts {
+                            out.push(bilgepump_alert_to_event(
+                                alert,
+                                &meta.capture_id,
+                                chunk.interface_id,
+                                chunk.frame_index,
+                                chunk.timestamp,
+                                chunk.segment_hash,
+                                &chunk.context,
+                                chunk.captured_len,
+                                l2_payload,
+                            ));
+                        }
+                    }
+                } else if ethertype == 0x88CC {
+                    use crate::dissectors::lldp::LldpDissector;
+                    use crate::registry::ProtocolDissector as _;
+                    let lldp_d = LldpDissector;
+                    if let Some(ProtocolData::Lldp(ref fields)) =
+                        lldp_d.parse(l2_payload, &chunk.context)
+                    {
+                        let bp_alerts = self.bilgepump.observe_lldp(
+                            fields, &src_mac, timestamp,
+                        );
+                        for alert in &bp_alerts {
+                            out.push(bilgepump_alert_to_event(
+                                alert,
+                                &meta.capture_id,
+                                chunk.interface_id,
+                                chunk.frame_index,
+                                chunk.timestamp,
+                                chunk.segment_hash,
+                                &chunk.context,
+                                chunk.captured_len,
+                                l2_payload,
+                            ));
+                        }
                     }
                 }
             }
@@ -531,6 +643,7 @@ impl DpiEngine {
                                 timestamp: timestamp_ns,
                             },
                             ethertype,
+                            ip_proto: Some(6),
                             llc: None,
                             transport: TransportProtocol::Tcp,
                             payload,
@@ -581,6 +694,7 @@ impl DpiEngine {
                                 timestamp: timestamp_ns,
                             },
                             ethertype,
+                            ip_proto: Some(17),
                             llc: None,
                             transport: TransportProtocol::Udp,
                             payload,
@@ -595,24 +709,51 @@ impl DpiEngine {
                         }
                     }
                     1 => {
-                        out.push(parse_anomaly_event(
-                            meta.capture_id.clone(),
-                            build_envelope(
-                                &base_context,
-                                interface_id,
-                                frame_index,
-                                timestamp,
-                                segment_hash,
-                                TransportProtocol::Icmp,
-                                None,
-                                captured_len as u64,
-                                make_ip_session_key(src_ip, dst_ip, 0, 0, "icmp"),
-                            ),
-                            "engine",
-                            "low",
-                            "icmp observed without dedicated decoder",
+                        let session_key =
+                            make_ip_session_key(src_ip, dst_ip, 0, 0, "icmp");
+                        let chunk = StreamChunk {
+                            capture_id: &meta.capture_id,
+                            segment_hash,
+                            interface_id,
+                            frame_index,
+                            timestamp,
+                            context: PacketContext {
+                                src_mac,
+                                dst_mac,
+                                src_ip,
+                                dst_ip,
+                                src_port: 0,
+                                dst_port: 0,
+                                vlan_id,
+                                timestamp: timestamp_ns,
+                            },
+                            ethertype,
+                            ip_proto: Some(1),
+                            llc: None,
+                            transport: TransportProtocol::Icmp,
+                            payload: transport_payload,
+                            session_key,
+                            captured_len: captured_len as u64,
+                        };
+
+                        for decoder in &mut self.decoders {
+                            if interest_matches(decoder.interest(), &chunk) {
+                                decoder.on_datagram(&chunk, &mut out);
+                            }
+                        }
+
+                        // Stovetop ICMP anomaly detection
+                        let icmp_findings = crate::stovetop::icmp::inspect_icmp(
+                            &self.stovetop_config,
                             transport_payload,
-                        ));
+                        );
+                        for finding in &icmp_findings {
+                            out.push(stovetop_finding_to_event(
+                                finding,
+                                &meta.capture_id,
+                                &chunk,
+                            ));
+                        }
                     }
                     _ => {
                         out.push(parse_anomaly_event(
@@ -645,6 +786,7 @@ impl DpiEngine {
                     timestamp,
                     context: base_context.clone(),
                     ethertype: value,
+                    ip_proto: None,
                     llc: None,
                     transport: TransportProtocol::Ethernet,
                     payload: l2_payload,
@@ -748,6 +890,7 @@ impl DpiEngine {
                     timestamp,
                     context: base_context.clone(),
                     ethertype: value,
+                    ip_proto: None,
                     llc,
                     transport: TransportProtocol::Ethernet,
                     payload,
@@ -881,6 +1024,7 @@ struct PacketRecord {
     interface_id: u32,
     timestamp: DateTime<Utc>,
     captured_len: usize,
+    orig_len: u32,
     data: Vec<u8>,
 }
 
@@ -1037,6 +1181,7 @@ fn pcapng_packet_record(block: &[u8]) -> Result<Option<PacketRecord>, DpiError> 
     let ts_high = u32::from_le_bytes([block[12], block[13], block[14], block[15]]) as u64;
     let ts_low = u32::from_le_bytes([block[16], block[17], block[18], block[19]]) as u64;
     let captured_len = u32::from_le_bytes([block[20], block[21], block[22], block[23]]) as usize;
+    let orig_len = u32::from_le_bytes([block[24], block[25], block[26], block[27]]);
     let timestamp_us = (ts_high << 32) | ts_low;
     let timestamp = Utc
         .timestamp_opt(
@@ -1057,6 +1202,7 @@ fn pcapng_packet_record(block: &[u8]) -> Result<Option<PacketRecord>, DpiError> 
         interface_id,
         timestamp,
         captured_len,
+        orig_len,
         data: block[pkt_start..pkt_start + captured_len].to_vec(),
     }))
 }
@@ -1117,7 +1263,7 @@ fn read_pcap_packet<R: Read>(
     let ts_sec = read_u32([header[0], header[1], header[2], header[3]]) as i64;
     let ts_frac = read_u32([header[4], header[5], header[6], header[7]]) as u64;
     let incl_len = read_u32([header[8], header[9], header[10], header[11]]) as usize;
-    let _orig_len = read_u32([header[12], header[13], header[14], header[15]]);
+    let orig_len = read_u32([header[12], header[13], header[14], header[15]]);
     let unit_nanos = flavor.timestamp_unit_nanos();
     let nanos_total = ts_frac
         .checked_mul(unit_nanos)
@@ -1137,6 +1283,7 @@ fn read_pcap_packet<R: Read>(
         interface_id: 0,
         timestamp,
         captured_len: incl_len,
+        orig_len,
         data,
     }))
 }
@@ -1170,6 +1317,7 @@ fn interest_matches(interests: &[DecoderInterest], chunk: &StreamChunk<'_>) -> b
             chunk.transport == TransportProtocol::Udp
                 && (chunk.context.src_port == *port || chunk.context.dst_port == *port)
         }
+        DecoderInterest::IpProto(proto) => chunk.ip_proto == Some(*proto),
         DecoderInterest::Llc { dsap, ssap } => chunk
             .llc
             .map(|llc| llc.dsap == *dsap && llc.ssap == *ssap)
@@ -6938,6 +7086,195 @@ impl SessionDecoder for LacpDecoder {
     }
 }
 
+// ── ICMP Decoder ──────────────────────────────────────────────
+
+#[derive(Default)]
+struct IcmpDecoder {
+    dissector: IcmpDissector,
+}
+
+impl SessionDecoder for IcmpDecoder {
+    fn name(&self) -> &'static str {
+        "icmp"
+    }
+
+    fn interest(&self) -> &'static [DecoderInterest] {
+        &[DecoderInterest::IpProto(1)]
+    }
+
+    fn on_datagram(&mut self, chunk: &StreamChunk<'_>, out: &mut Vec<BronzeEvent>) {
+        let context = &chunk.context;
+        if !self.dissector.can_parse(chunk.payload, 0, 0) {
+            return;
+        }
+        let Some(proto_data) = self.dissector.parse(chunk.payload, context) else {
+            return;
+        };
+        let ProtocolData::Icmp(fields) = &proto_data else {
+            return;
+        };
+
+        let envelope = build_envelope(
+            context,
+            chunk.interface_id,
+            chunk.frame_index,
+            chunk.timestamp,
+            chunk.segment_hash,
+            TransportProtocol::Icmp,
+            Some("icmp"),
+            chunk.captured_len,
+            chunk.session_key.clone(),
+        );
+
+        let mut attrs = BTreeMap::new();
+        attrs.insert("icmp_type".to_string(), fields.icmp_type.to_string());
+        attrs.insert("icmp_code".to_string(), fields.icmp_code.to_string());
+        attrs.insert("type_name".to_string(), fields.type_name.clone());
+        if !fields.code_name.is_empty() {
+            attrs.insert("code_name".to_string(), fields.code_name.clone());
+        }
+        if let Some(id) = fields.identifier {
+            attrs.insert("identifier".to_string(), id.to_string());
+        }
+        if let Some(seq) = fields.sequence {
+            attrs.insert("sequence".to_string(), seq.to_string());
+        }
+        if let Some(gw) = &fields.gateway_ip {
+            attrs.insert("gateway_ip".to_string(), gw.clone());
+        }
+        attrs.insert("payload_len".to_string(), fields.payload_len.to_string());
+
+        let operation = fields.type_name.clone();
+        let status = if fields.icmp_type == 3 {
+            fields.code_name.clone()
+        } else {
+            "ok".to_string()
+        };
+
+        out.push(new_event(
+            chunk.capture_id.to_string(),
+            envelope,
+            BronzeEventFamily::ProtocolTransaction(ProtocolTransaction {
+                operation,
+                status,
+                request_summary: Some(format!(
+                    "ICMP type {} code {}",
+                    fields.icmp_type, fields.icmp_code
+                )),
+                response_summary: None,
+                object_refs: Vec::new(),
+                values: Vec::new(),
+                attributes: attrs,
+            }),
+        ));
+    }
+}
+
+// ── Stovetop finding → BronzeEvent helpers ────────────────────
+
+/// Convert a stovetop finding to a BronzeEvent using a StreamChunk for envelope.
+fn stovetop_finding_to_event(
+    finding: &FrameFinding,
+    capture_id: &str,
+    chunk: &StreamChunk<'_>,
+) -> BronzeEvent {
+    let envelope = build_envelope(
+        &chunk.context,
+        chunk.interface_id,
+        chunk.frame_index,
+        chunk.timestamp,
+        chunk.segment_hash,
+        chunk.transport,
+        None,
+        chunk.captured_len,
+        chunk.session_key.clone(),
+    );
+
+    new_event(
+        capture_id.to_string(),
+        envelope,
+        BronzeEventFamily::ParseAnomaly(ParseAnomaly {
+            decoder: finding.decoder.to_string(),
+            severity: finding.severity.as_str().to_string(),
+            reason: finding.reason(),
+            raw_excerpt_hex: String::new(),
+        }),
+    )
+}
+
+/// Convert a stovetop finding to a BronzeEvent using raw frame context
+/// (for pre-dissector findings before a StreamChunk exists).
+fn stovetop_finding_to_event_raw(
+    finding: &FrameFinding,
+    capture_id: &str,
+    interface_id: u32,
+    frame_index: u64,
+    timestamp: DateTime<Utc>,
+    segment_hash: &str,
+    context: &PacketContext,
+    captured_len: u64,
+    raw_frame: &[u8],
+) -> BronzeEvent {
+    let envelope = build_envelope(
+        context,
+        interface_id,
+        frame_index,
+        timestamp,
+        segment_hash,
+        TransportProtocol::Ethernet,
+        None,
+        captured_len,
+        String::new(),
+    );
+
+    new_event(
+        capture_id.to_string(),
+        envelope,
+        BronzeEventFamily::ParseAnomaly(ParseAnomaly {
+            decoder: finding.decoder.to_string(),
+            severity: finding.severity.as_str().to_string(),
+            reason: finding.reason(),
+            raw_excerpt_hex: hex::encode(&raw_frame[..raw_frame.len().min(32)]),
+        }),
+    )
+}
+
+/// Convert a bilgepump alert to a BronzeEvent.
+fn bilgepump_alert_to_event(
+    alert: &BilgepumpAlert,
+    capture_id: &str,
+    interface_id: u32,
+    frame_index: u64,
+    timestamp: DateTime<Utc>,
+    segment_hash: &str,
+    context: &PacketContext,
+    captured_len: u64,
+    raw_excerpt: &[u8],
+) -> BronzeEvent {
+    let envelope = build_envelope(
+        context,
+        interface_id,
+        frame_index,
+        timestamp,
+        segment_hash,
+        TransportProtocol::Ethernet,
+        None,
+        captured_len,
+        String::new(),
+    );
+
+    new_event(
+        capture_id.to_string(),
+        envelope,
+        BronzeEventFamily::ParseAnomaly(ParseAnomaly {
+            decoder: alert.decoder.to_string(),
+            severity: alert.severity.as_str().to_string(),
+            reason: alert.reason(),
+            raw_excerpt_hex: hex::encode(&raw_excerpt[..raw_excerpt.len().min(32)]),
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8316,6 +8653,257 @@ mod tests {
                     if artifact.artifact_type == "profinet_payload"
             )),
             "expected profinet artifact from raw ethertype frame"
+        );
+    }
+
+    // ── ICMP integration tests ────────────────────────────────
+
+    fn ethernet_ipv4_icmp(icmp_payload: &[u8]) -> Vec<u8> {
+        let mut frame = Vec::new();
+        // Ethernet header
+        frame.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]); // dst mac
+        frame.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]); // src mac
+        frame.extend_from_slice(&0x0800u16.to_be_bytes()); // ethertype IPv4
+        // IPv4 header (20 bytes)
+        let total_len = 20 + icmp_payload.len();
+        frame.extend_from_slice(&[
+            0x45,                                    // version + IHL
+            0x00,                                    // DSCP
+            ((total_len >> 8) & 0xFF) as u8,         // total length hi
+            (total_len & 0xFF) as u8,                // total length lo
+            0x00, 0x01,                              // identification
+            0x00, 0x00,                              // flags + fragment offset
+            64,                                      // TTL
+            1,                                       // protocol = ICMP
+            0, 0,                                    // header checksum (skip)
+            10, 0, 0, 1,                             // src IP
+            10, 0, 0, 2,                             // dst IP
+        ]);
+        frame.extend_from_slice(icmp_payload);
+        frame
+    }
+
+    #[test]
+    fn icmp_echo_request_produces_transaction() {
+        let icmp = vec![8, 0, 0x00, 0x00, 0, 1, 0, 1, 0xAA, 0xBB, 0xCC, 0xDD];
+        let frame = ethernet_ipv4_icmp(&icmp);
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ProtocolTransaction(tx)
+                    if tx.operation == "Echo Request"
+            )),
+            "expected ICMP Echo Request transaction"
+        );
+        assert!(
+            output.events.iter().any(|event| event.protocol() == Some("icmp")),
+            "expected protocol=icmp"
+        );
+    }
+
+    #[test]
+    fn icmp_redirect_produces_stovetop_finding() {
+        // ICMP Redirect: type 5, code 1, gateway 10.0.0.99
+        let icmp = vec![5, 1, 0, 0, 10, 0, 0, 99, 0x45, 0x00, 0x00, 0x28];
+        let frame = ethernet_ipv4_icmp(&icmp);
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+        // Should have both a protocol transaction AND a stovetop anomaly
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ProtocolTransaction(tx)
+                    if tx.operation == "Redirect"
+            )),
+            "expected ICMP Redirect transaction"
+        );
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ParseAnomaly(anomaly)
+                    if anomaly.decoder == "stovetop:icmp_redirect"
+            )),
+            "expected stovetop ICMP redirect anomaly"
+        );
+    }
+
+    #[test]
+    fn icmp_dest_unreachable_produces_transaction() {
+        let icmp = vec![3, 3, 0, 0, 0, 0, 0, 0]; // port unreachable
+        let frame = ethernet_ipv4_icmp(&icmp);
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ProtocolTransaction(tx)
+                    if tx.operation == "Destination Unreachable"
+                    && tx.status == "Port Unreachable"
+            )),
+            "expected ICMP Destination Unreachable / Port Unreachable"
+        );
+    }
+
+    #[test]
+    fn icmp_router_advertisement_flags_suspicious() {
+        let icmp = vec![9, 0, 0, 0, 1, 2, 0, 30]; // router advertisement
+        let frame = ethernet_ipv4_icmp(&icmp);
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ParseAnomaly(anomaly)
+                    if anomaly.decoder == "stovetop:icmp_suspicious"
+            )),
+            "expected stovetop suspicious ICMP type anomaly"
+        );
+    }
+
+    // ── Stovetop frame-level integration tests ────────────────
+
+    #[test]
+    fn stovetop_runt_frame_detected() {
+        // Build a tiny frame (30 bytes, well below 60 minimum)
+        let mut frame = vec![0u8; 30];
+        // Valid enough ethernet header
+        frame[12] = 0x08;
+        frame[13] = 0x00; // ethertype IPv4
+        frame[14] = 0x45; // IP version+IHL
+        frame[16] = 0x00;
+        frame[17] = 16; // tiny IP total_length
+
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ParseAnomaly(anomaly)
+                    if anomaly.decoder == "stovetop:runt"
+            )),
+            "expected stovetop runt frame anomaly"
+        );
+    }
+
+    // ── Bilgepump integration tests ───────────────────────────
+
+    fn ethernet_arp_reply(
+        src_mac: [u8; 6],
+        sender_mac: [u8; 6],
+        sender_ip: [u8; 4],
+    ) -> Vec<u8> {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&[0xFF; 6]); // dst mac (broadcast)
+        frame.extend_from_slice(&src_mac);
+        frame.extend_from_slice(&0x0806u16.to_be_bytes());
+        frame.extend_from_slice(&[
+            0x00, 0x01, // hardware type: Ethernet
+            0x08, 0x00, // protocol type: IPv4
+            0x06,       // hardware size
+            0x04,       // protocol size
+            0x00, 0x02, // operation: reply
+        ]);
+        frame.extend_from_slice(&sender_mac);
+        frame.extend_from_slice(&sender_ip);
+        frame.extend_from_slice(&[0x00; 6]); // target mac
+        frame.extend_from_slice(&[0x00; 4]); // target ip
+        frame
+    }
+
+    #[test]
+    fn bilgepump_arp_spoof_detected() {
+        // Two ARP replies for the same IP from different MACs
+        let mac_a = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let mac_b = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        let ip = [10, 0, 0, 1];
+
+        let frame_a = ethernet_arp_reply(mac_a, mac_a, ip);
+        let frame_b = ethernet_arp_reply(mac_b, mac_b, ip);
+
+        // Build pcapng with both frames
+        let mut data = Vec::new();
+        // SHB
+        data.extend_from_slice(&0x0A0D0D0Au32.to_le_bytes());
+        data.extend_from_slice(&28u32.to_le_bytes());
+        data.extend_from_slice(&0x1A2B3C4Du32.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&0xFFFF_FFFF_FFFF_FFFFu64.to_le_bytes());
+        data.extend_from_slice(&28u32.to_le_bytes());
+        // Frame A
+        data.extend_from_slice(&build_epb(&frame_a, 1_000_000));
+        // Frame B (1 second later)
+        data.extend_from_slice(&build_epb(&frame_b, 2_000_000));
+
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(data))
+            .unwrap();
+
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ParseAnomaly(anomaly)
+                    if anomaly.decoder == "bilgepump:arp_spoof"
+            )),
+            "expected bilgepump ARP spoof alert"
+        );
+    }
+
+    #[test]
+    fn bilgepump_vlan_hopping_detected() {
+        let mut frame = Vec::new();
+        // Ethernet header
+        frame.extend_from_slice(&[0xFF; 6]); // dst mac
+        frame.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // src mac
+        // Outer 802.1Q: VLAN 100
+        frame.extend_from_slice(&0x8100u16.to_be_bytes());
+        frame.extend_from_slice(&100u16.to_be_bytes());
+        // Inner 802.1Q: VLAN 200
+        frame.extend_from_slice(&0x8100u16.to_be_bytes());
+        frame.extend_from_slice(&200u16.to_be_bytes());
+        // Ethertype IPv4
+        frame.extend_from_slice(&0x0800u16.to_be_bytes());
+        // Minimal IPv4 header
+        let total_len = 20u16;
+        frame.extend_from_slice(&[
+            0x45, 0x00,
+            (total_len >> 8) as u8, (total_len & 0xFF) as u8,
+            0x00, 0x01, 0x00, 0x00, 64, 6, 0, 0,
+            10, 0, 0, 1,  // src
+            10, 0, 0, 2,  // dst
+        ]);
+
+        let pcapng = build_pcapng(&frame);
+        let mut engine = DpiEngine::new();
+        let output = engine
+            .process_segment_to_vec(&SegmentMeta::new("test"), std::io::Cursor::new(pcapng))
+            .unwrap();
+
+        assert!(
+            output.events.iter().any(|event| matches!(
+                &event.family,
+                BronzeEventFamily::ParseAnomaly(anomaly)
+                    if anomaly.decoder == "bilgepump:vlan_hop"
+            )),
+            "expected bilgepump VLAN hopping alert"
         );
     }
 }

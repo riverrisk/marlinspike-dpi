@@ -56,6 +56,7 @@ pub enum ProtocolData {
     Pvst(PvstFields),
     Prp(PrpFields),
     Lacp(LacpFields),
+    Icmp(IcmpFields),
 }
 
 impl ProtocolData {
@@ -95,6 +96,7 @@ impl ProtocolData {
             Self::Pvst(_) => "pvst",
             Self::Prp(_) => "prp",
             Self::Lacp(_) => "lacp",
+            Self::Icmp(_) => "icmp",
         }
     }
 }
@@ -512,6 +514,19 @@ pub struct LacpPartner {
     pub port: u16,
     pub state: u8,
     pub state_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IcmpFields {
+    pub icmp_type: u8,
+    pub icmp_code: u8,
+    pub checksum: u16,
+    pub type_name: String,
+    pub code_name: String,
+    pub identifier: Option<u16>,
+    pub sequence: Option<u16>,
+    pub gateway_ip: Option<String>,
+    pub payload_len: usize,
 }
 
 // ── Trait + Registry ───────────────────────────────────────────

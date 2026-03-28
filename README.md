@@ -10,14 +10,18 @@ Usable as:
 - a **CLI binary** (`marlinspike-dpi`)
 - an optional **C FFI** surface (feature `ffi`)
 
-## Protocol Coverage
+---
+
+## Signature Set
+
+**34 protocol dissectors**, frame-level integrity inspection, and ICMP anomaly detection across OT/ICS, IT, and L2 layers.
 
 ### OT / ICS Protocols
 
 | Protocol | Transport | Port / EtherType | Parsing Depth |
 |----------|-----------|-----------------|---------------|
 | Modbus/TCP | TCP | 502 | MBAP header, function codes, register read/write, exception codes, device identification (FC 43) |
-| DNP3 | TCP | 20000 | DLL + transport + application layer, function codes, source/dest address, role inference |
+| DNP3 | TCP | 20000 | DLL + transport + application layer, function codes, source/dest address, role inference. DLL CRC-16 validation via stovetop. |
 | IEC 60870-5-104 | TCP | 2404 | APCI frame types (I/S/U), ASDU type ID, cause of transmission, IOA |
 | IEC 61850 MMS | TCP | 102 | ISO-on-TCP + COTP + MMS service identification, TSAP extraction, visible strings |
 | IEC 61850 GOOSE | L2 | 0x88B8 | Application ID, dataset references |
@@ -48,6 +52,7 @@ Usable as:
 | MQTT | TCP | 1883, 8883 | CONNECT (client_id, username, protocol version, clean session), PUBLISH (topic, QoS, retain), SUBSCRIBE (topic) |
 | Syslog | UDP | 514 | RFC 3164 + RFC 5424: facility, severity, hostname, app name, message |
 | RADIUS | UDP | 1812, 1813 | Access-Request/Accept/Reject/Accounting, username, NAS-IP, NAS-Identifier, calling/called station ID |
+| ICMP | IP proto 1 | -- | Type/code parsing, echo id/sequence, redirect gateway extraction, timestamp/mask requests, destination unreachable codes |
 
 ### L2 / Link Layer Protocols
 
@@ -64,7 +69,138 @@ Usable as:
 | PRP | EtherType 0x88FB | Supervision type, source/RedBox MAC, sequence number |
 | MRP | EtherType 0x88E3 | Frame type, domain UUID, ring state (open/closed), priority |
 
-**33 protocol dissectors** total. Pure Rust, no C dependencies.
+---
+
+## Stovetop: Frame-Level Integrity & Anomaly Detection
+
+The **stovetop** module (`src/stovetop/`) inspects every frame for structural anomalies that protocol-level dissectors ignore. It hooks into the engine at two points: pre-dissector (frame-level) and per-dissector (protocol-specific).
+
+### Frame Integrity Checks
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| Runt frame detection | `stovetop:runt` | Medium | Frames with `orig_len` below the 60-byte Ethernet minimum (FCS-stripped). Under-sized frames on OT networks can indicate misconfigured devices or crafted packets. |
+| Oversized frame detection | `stovetop:oversized` | Low/High | Frames exceeding 1514 bytes (standard) or 9018 bytes (jumbo). Jumbo-range is Low; beyond jumbo is High. |
+| Capture truncation | `stovetop:truncated` | Low | `captured_len < orig_len` — the capture interface snapped the packet. Flags data loss that could mask protocol content. |
+| Non-zero Ethernet padding | `stovetop:padding` | Medium/High | Padding bytes after the IP total-length boundary that contain non-zero data. Medium for low-entropy fills (implementation quirks), High for high-entropy fills (possible covert channel or data exfiltration). Shannon entropy scoring. |
+| Ethernet FCS validation | `stovetop:fcs` | High | CRC-32 validation of the Ethernet frame check sequence when present. Invalid FCS indicates tampering, corruption, or replay artifacts. |
+
+### Protocol Integrity Checks
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| DNP3 DLL CRC-16 | `stovetop:integrity` | High | Validates CRC-16 on DNP3 data-link-layer header and user-data blocks. CRC mismatches indicate data corruption, man-in-the-middle modification, or replay of tampered frames. Uses the DNP3 polynomial (0x3D65 reflected). |
+
+### ICMP Anomaly Detection
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| ICMP Redirect | `stovetop:icmp_redirect` | Critical | Type 5 messages that instruct hosts to reroute traffic through an attacker-controlled gateway. Should never appear on OT/ICS networks. Extracts gateway IP for investigation. |
+| ICMP Tunnel | `stovetop:icmp_tunnel` | High | Echo Request/Reply (types 0, 8) with payloads >= 64 bytes and Shannon entropy > 6.0. Detects covert channels using tools like icmpsh, ptunnel, or custom ICMP tunnels. Normal pings have predictable low-entropy padding. |
+| Suspicious ICMP type | `stovetop:icmp_suspicious` | Medium/High | Router Advertisement (type 9), Router Solicitation (type 10) — rogue router injection. Timestamp Request/Reply (types 13/14), Address Mask Request/Reply (types 17/18) — host fingerprinting and subnet discovery via deprecated types. |
+
+### Configuration
+
+All checks are enabled by default. Each check can be individually toggled via `StovetopConfig`:
+
+```rust
+use fm_dpi::stovetop::config::StovetopConfig;
+
+let mut config = StovetopConfig::default();
+config.check_padding = false;           // disable padding inspection
+config.padding_entropy_threshold = 3.0; // adjust covert channel sensitivity
+config.max_ethernet_frame = 9018;       // jumbo frames are expected
+```
+
+---
+
+## Bilgepump: Stateful L2 Monitoring
+
+The **bilgepump** module (`src/bilgepump/`) accumulates state across frames to detect temporal L2 anomalies that per-frame inspection cannot catch. It hooks into the engine at two points: pre-VLAN-unwrap (VLAN hopping, MAC anomalies) and post-decoder (protocol-specific stateful analysis).
+
+Unlike stovetop, bilgepump maintains **cross-frame state**: MAC/IP binding tables, STP root history, DHCP server identity tracking, and LLDP/CDP identity records. State ages out automatically via configurable TTLs and is evicted at end-of-segment.
+
+### ARP Spoofing & Poisoning
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| ARP spoof detection | `bilgepump:arp_spoof` | Critical | IP address claimed by a different MAC than the established binding. Classic MitM setup — the attacker poisons the ARP cache so traffic flows through them. Only fires within the binding TTL window. |
+| Gratuitous ARP | `bilgepump:arp_gratuitous` | Medium | Unsolicited ARP replies (sender_ip == target_ip). Legitimate uses exist (IP failover, VRRP), but on OT networks these are often attack indicators. |
+| ARP flood | `bilgepump:arp_flood` | High | Excessive ARP replies from a single MAC within a sliding window. Indicates ARP cache poisoning at scale or address pool flooding. |
+
+### MAC Anomalies
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| Locally-administered MAC | `bilgepump:mac_local` | Low | Source MAC with the locally-administered bit set (bit 1 of first octet). Indicates VMs, containers, or spoofed NICs — unusual on OT networks with physical devices. |
+| Multicast source MAC | `bilgepump:mac_multicast` | High | Multicast bit set on a source MAC — this should never happen in legitimate unicast traffic. Indicates crafted frames. |
+| MAC flapping | `bilgepump:mac_flap` | High | A single MAC associated with multiple distinct IPs within a sliding window. Indicates ARP spoofing, DHCP exhaustion, or a compromised device scanning the network. |
+
+### VLAN Hopping
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| Double-tagged 802.1Q | `bilgepump:vlan_hop` | Critical | Frame with nested 802.1Q tags where outer and inner VLAN IDs differ. Classic VLAN hopping attack — the outer tag is stripped by the first switch, and the inner tag routes the frame to a different VLAN the attacker shouldn't reach. |
+
+### STP Manipulation
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| STP root change | `bilgepump:stp_root_change` | High | The elected STP root bridge has changed. On a stable OT network, this should be rare. Frequent changes indicate topology manipulation or a rogue switch claiming root. |
+| Unauthorized root | `bilgepump:stp_unauthorized` | High | A bridge claiming root status that is not on the configured whitelist. Direct indicator of a rogue switch or STP attack. Only active when `stp_root_whitelist` is configured. |
+
+### DHCP Abuse
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| Rogue DHCP server | `bilgepump:dhcp_rogue` | Critical | DHCP Offer or Ack from a server not in the `known_dhcp_servers` list. Rogue DHCP servers can redirect all network traffic or assign attacker-controlled DNS. |
+| DHCP starvation | `bilgepump:dhcp_starvation` | High | Excessive DHCP Discover/Request volume within a sliding window. Indicates an attacker exhausting the DHCP address pool to force clients onto a rogue server. |
+
+### Identity Conflicts
+
+| Check | Decoder Tag | Severity | What It Catches |
+|-------|-------------|----------|-----------------|
+| LLDP identity conflict | `bilgepump:lldp_conflict` | High | Same source MAC advertising a different LLDP chassis_id than previously observed. Indicates device impersonation or a rogue device swapped onto the same port. |
+| CDP identity conflict | `bilgepump:cdp_conflict` | High | Same source MAC advertising a different CDP device_id than previously observed. Same implications as LLDP conflict — device identity should be stable. |
+
+### Configuration
+
+All checks are enabled by default. Bilgepump supports blessed bindings, STP root whitelists, and known DHCP server lists:
+
+```rust
+use fm_dpi::bilgepump::config::{BilgepumpConfig, BlessedBinding};
+
+let mut config = BilgepumpConfig::default();
+
+// Known-good MAC/IP pairs that should never trigger ARP spoof alerts
+config.blessed_bindings.push(BlessedBinding {
+    mac: "00:1c:06:aa:bb:cc".to_string(),
+    ip: "10.0.1.50".to_string(),
+    description: Some("PLC-01 Siemens S7-1500".to_string()),
+});
+
+// Only these bridges should ever be STP root
+config.stp_root_whitelist = vec!["8000.001c06aabbcc".to_string()];
+
+// Only this server should respond to DHCP
+config.known_dhcp_servers = vec!["10.0.0.1".to_string()];
+
+// Tune thresholds
+config.arp_binding_ttl_secs = 600;      // 10 minute binding TTL
+config.arp_flood_threshold = 30;         // lower threshold for OT
+config.mac_flap_threshold = 3;           // 3 distinct IPs = flapping
+```
+
+### State Persistence
+
+Bilgepump state is in-memory by default. For long-running deployments that need state across process restarts, the `BilgepumpMonitor` can be serialized:
+
+```rust
+// State tables implement Serialize/Deserialize for snapshot/restore
+// (caller handles I/O — the engine stays disk-free)
+```
+
+---
 
 ## Bronze v2 Event Model
 
@@ -72,10 +208,10 @@ Every packet processed produces zero or more `BronzeEvent`s, each wrapping an `E
 
 | Family | Purpose | Example |
 |--------|---------|---------|
-| **ProtocolTransaction** | Request-response pair or single operation | Modbus read_holding_registers, DNS query/response |
+| **ProtocolTransaction** | Request-response pair or single operation | Modbus read_holding_registers, DNS query/response, ICMP Echo Request |
 | **AssetObservation** | Device/service identification | LLDP system name, DHCP hostname, SSH banner |
 | **TopologyObservation** | Network relationship | ARP neighbor, LACP bond, STP root path, MRP ring |
-| **ParseAnomaly** | Malformed or invalid packet | Bad MBAP length, truncated DNP3 frame |
+| **ParseAnomaly** | Malformed, invalid, or suspicious packet | Bad MBAP length, truncated DNP3 frame, ICMP redirect, non-zero padding |
 | **ExtractedArtifact** | Binary payload extraction | Modbus write data, DNP3 application payload |
 
 ### EventEnvelope
@@ -86,10 +222,12 @@ Every event carries full packet context: timestamp, src/dst MAC, src/dst IP, src
 
 Multi-collector deployments produce overlapping captures. The engine deduplicates using SHA256 over `(quantized_timestamp, src_ip, dst_ip, src_port, dst_port, family_key)` with a 5-second sliding window and 1-second quantization bucket.
 
+Stovetop findings dedup independently from protocol events using their `stovetop:*` decoder prefix as part of the family key.
+
 ## Supported Inputs
 
 - Classic PCAP (little/big endian, microsecond/nanosecond timestamps)
-- PCAPNG
+- PCAPNG (Enhanced Packet Blocks, preserves `orig_len` for truncation detection)
 - Ethernet linktype only (unsupported linktypes fail fast)
 
 ## CLI
@@ -108,10 +246,10 @@ marlinspike-dpi \
 
 Options:
 
-- `--input <path>` — PCAP or PCAPNG capture file
-- `--capture-id <id>` — stable identifier stamped into Bronze output (defaults to filename)
-- `--output <path>` — JSON output path (stdout when omitted)
-- `--pretty` — pretty-print JSON
+- `--input <path>` -- PCAP or PCAPNG capture file
+- `--capture-id <id>` -- stable identifier stamped into Bronze output (defaults to filename)
+- `--output <path>` -- JSON output path (stdout when omitted)
+- `--pretty` -- pretty-print JSON
 
 Output envelope:
 
@@ -195,18 +333,91 @@ Options: `--filter <text>` to subset fixtures, `--allow-missing` for partial che
 
 ```
 Iron (PCAP/PCAPNG bytes)
-  → capture format detection (magic bytes)
-  → per-packet: Ethernet → VLAN → IP → TCP/UDP header parsing
-  → route to decoders by DecoderInterest (EtherType, TcpPort, UdpPort, LLC, SNAP)
-  → decoder calls dissector.parse(), synthesizes BronzeEvent(s)
-  → SHA256 dedup filter (5s window)
-  → batch (256 events) → output
+  -> capture format detection (magic bytes)
+  -> per-packet: Ethernet header parsing (MAC extraction)
+  -> bilgepump pre-VLAN: VLAN hopping detection, MAC anomalies
+  -> VLAN unwrapping -> IP -> TCP/UDP/ICMP header parsing
+  -> stovetop pre-dissector: frame integrity checks (runt, oversized, truncation, padding, FCS)
+  -> route to decoders by DecoderInterest (EtherType, TcpPort, UdpPort, IpProto, LLC, SNAP)
+  -> decoder calls dissector.parse(), synthesizes BronzeEvent(s)
+  -> bilgepump post-decoder: stateful L2 analysis (ARP spoof, STP root, DHCP abuse, identity)
+  -> stovetop per-dissector: protocol integrity checks (DNP3 CRC, ICMP anomalies)
+  -> SHA256 dedup filter (5s window)
+  -> batch (256 events) -> output
 ```
 
-Two-tier design:
+Four-tier design:
 
-- **Dissectors** (`src/dissectors/*.rs`) — stateless protocol parsers implementing `ProtocolDissector` trait. Extract binary fields from payload bytes.
-- **Decoders** (`src/engine.rs`) — stateful session managers implementing `SessionDecoder` trait. Correlate request/response pairs, manage session state, emit Bronze events.
+- **Dissectors** (`src/dissectors/*.rs`) -- stateless protocol parsers implementing `ProtocolDissector` trait. Extract binary fields from payload bytes.
+- **Decoders** (`src/engine.rs`) -- stateful session managers implementing `SessionDecoder` trait. Correlate request/response pairs, manage session state, emit Bronze events.
+- **Stovetop** (`src/stovetop/*.rs`) -- frame-level and protocol-level integrity inspector. Runs pre-dissector and per-dissector, emits `ParseAnomaly` events for structural anomalies, covert channels, and ICMP abuse.
+- **Bilgepump** (`src/bilgepump/*.rs`) -- stateful L2 monitor. Accumulates MAC/IP bindings, STP root history, DHCP server identity, and device identities across frames. Detects temporal anomalies: ARP spoofing, VLAN hopping, STP manipulation, rogue DHCP, identity conflicts.
+
+```
+src/
+  dissectors/          34 protocol parsers
+    modbus.rs          Modbus/TCP
+    dnp3.rs            DNP3
+    iec104.rs          IEC 60870-5-104
+    iec61850.rs        IEC 61850 (MMS, GOOSE, SV)
+    ethernet_ip.rs     EtherNet/IP + CIP
+    opc_ua.rs          OPC UA
+    s7comm.rs          S7comm
+    profinet.rs        PROFINET
+    bacnet.rs          BACnet/IP
+    hart_ip.rs         HART-IP
+    fins.rs            OMRON FINS
+    ethercat.rs        EtherCAT
+    mrp.rs             MRP
+    prp.rs             PRP
+    dns.rs             DNS + mDNS
+    dhcp.rs            DHCP
+    http.rs            HTTP
+    tcp.rs             TLS
+    snmp.rs            SNMP
+    ssh.rs             SSH
+    ftp.rs             FTP
+    ntp.rs             NTP
+    mqtt.rs            MQTT
+    syslog.rs          Syslog
+    radius.rs          RADIUS
+    icmp.rs            ICMP
+    arp.rs             ARP
+    lldp.rs            LLDP
+    cdp.rs             CDP
+    stp.rs             STP/RSTP
+    mstp.rs            MSTP
+    pvst.rs            PVST+
+    lacp.rs            LACP
+    vtp.rs             VTP
+  stovetop/            Frame-level integrity & anomaly detection
+    mod.rs             Module root
+    config.rs          StovetopConfig — per-check toggles and thresholds
+    findings.rs        FindingKind enum, severity, reason formatting
+    frame_inspector.rs FrameInspector — pre-dissector hook (runt, oversized, truncation, padding, FCS)
+    padding.rs         Ethernet padding extraction, Shannon entropy, non-zero fill detection
+    integrity.rs       CRC validation — Ethernet CRC-32, DNP3 CRC-16
+    icmp.rs            ICMP anomaly detection — redirects, tunnels, suspicious types
+  bilgepump/           Stateful L2 monitoring
+    mod.rs             Module root
+    config.rs          BilgepumpConfig — thresholds, blessed bindings, whitelists
+    state.rs           State table types — MAC/IP bindings, STP root, DHCP server, identity records
+    alerts.rs          AlertKind enum, severity, reason formatting
+    monitor.rs         BilgepumpMonitor — orchestrates all detectors, engine hook points
+    detectors/
+      arp.rs           ARP spoofing, gratuitous ARP, ARP flood
+      mac.rs           Locally-administered MAC, multicast source, MAC flapping
+      vlan.rs          VLAN hopping via double-tagged 802.1Q
+      stp.rs           STP root change, unauthorized root claims
+      dhcp.rs          Rogue DHCP server, DHCP starvation
+      identity.rs      LLDP/CDP identity conflict detection
+  engine.rs            DPI engine, session decoders, stovetop + bilgepump integration
+  bronze.rs            Bronze v2 event model
+  registry.rs          Dissector trait, ProtocolData enum, field structs
+  dedup.rs             SHA256-based deduplication
+  lib.rs               Library root
+  main.rs              CLI binary
+```
 
 ## Why This Crate Exists
 
