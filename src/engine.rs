@@ -18,6 +18,7 @@ use crate::bilgepump::alerts::BilgepumpAlert;
 use crate::bilgepump::config::BilgepumpConfig;
 use crate::bilgepump::monitor::BilgepumpMonitor;
 use crate::dedup::DedupEngine;
+use crate::icmpeeker::IcmpeekerConfig;
 use crate::stovetop::config::StovetopConfig;
 use crate::stovetop::findings::FrameFinding;
 use crate::stovetop::frame_inspector::FrameInspector;
@@ -170,7 +171,7 @@ pub struct DpiEngine {
     decoders: Vec<Box<dyn SessionDecoder>>,
     batch_size: usize,
     frame_inspector: FrameInspector,
-    stovetop_config: StovetopConfig,
+    icmpeeker_config: IcmpeekerConfig,
     bilgepump: BilgepumpMonitor,
 }
 
@@ -218,8 +219,8 @@ impl DpiEngine {
                 Box::new(LacpDecoder::default()),
                 Box::new(IcmpDecoder::default()),
             ],
-            frame_inspector: FrameInspector::new(stovetop_config.clone()),
-            stovetop_config,
+            frame_inspector: FrameInspector::new(stovetop_config),
+            icmpeeker_config: IcmpeekerConfig::default(),
             bilgepump: BilgepumpMonitor::new(BilgepumpConfig::default()),
             batch_size: 256,
         }
@@ -742,9 +743,9 @@ impl DpiEngine {
                             }
                         }
 
-                        // Stovetop ICMP anomaly detection
-                        let icmp_findings = crate::stovetop::icmp::inspect_icmp(
-                            &self.stovetop_config,
+                        // ICMPeeker anomaly detection
+                        let icmp_findings = crate::icmpeeker::inspect(
+                            &self.icmpeeker_config,
                             transport_payload,
                         );
                         for finding in &icmp_findings {
@@ -8729,7 +8730,7 @@ mod tests {
             output.events.iter().any(|event| matches!(
                 &event.family,
                 BronzeEventFamily::ParseAnomaly(anomaly)
-                    if anomaly.decoder == "stovetop:icmp_redirect"
+                    if anomaly.decoder == "icmpeeker:redirect"
             )),
             "expected stovetop ICMP redirect anomaly"
         );
@@ -8768,7 +8769,7 @@ mod tests {
             output.events.iter().any(|event| matches!(
                 &event.family,
                 BronzeEventFamily::ParseAnomaly(anomaly)
-                    if anomaly.decoder == "stovetop:icmp_suspicious"
+                    if anomaly.decoder == "icmpeeker:suspicious"
             )),
             "expected stovetop suspicious ICMP type anomaly"
         );

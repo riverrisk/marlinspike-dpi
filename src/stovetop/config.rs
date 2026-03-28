@@ -17,8 +17,6 @@ pub struct StovetopConfig {
     pub check_fcs: bool,
     /// Validate protocol-level CRCs (e.g. DNP3 DLL CRC-16).
     pub check_protocol_crc: bool,
-    /// Flag ICMP anomalies (redirects, tunneling indicators, etc.)
-    pub check_icmp_anomalies: bool,
     /// Minimum Ethernet frame size on the wire (including FCS).
     pub min_ethernet_frame: usize,
     /// Maximum Ethernet frame size (standard, not jumbo).
@@ -39,7 +37,6 @@ impl Default for StovetopConfig {
             check_padding: true,
             check_fcs: true,
             check_protocol_crc: true,
-            check_icmp_anomalies: true,
             min_ethernet_frame: 60, // 64 on wire minus 4-byte FCS (captures typically strip FCS)
             max_ethernet_frame: 1514, // 1518 minus FCS
             max_jumbo_frame: 9018,    // 9022 minus FCS
