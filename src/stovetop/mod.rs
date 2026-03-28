@@ -1,14 +1,20 @@
-//! Stovetop — frame-level inspection for padding, stuffing, and integrity anomalies.
+//! Stovetop — frame-level integrity inspection. Looks at the stuffing.
 //!
-//! The stovetop module hooks into the DPI engine at two points:
-//! - **Pre-dissector**: frame-level checks (runt detection, padding analysis,
-//!   truncation, FCS validation) run on every Ethernet frame before it is
-//!   dispatched to protocol decoders.
-//! - **Per-dissector**: protocol-specific integrity checks (DNP3 CRC, HDLC
-//!   byte-stuffing) run inside individual decoders.
+//! Runs pre-dissector on every Ethernet frame to catch structural anomalies
+//! that protocol parsers ignore:
 //!
-//! All findings are emitted as `BronzeEvent::ParseAnomaly` with the decoder
-//! field prefixed `"stovetop:"`.
+//! | Check | Tag | What It Catches |
+//! |-------|-----|-----------------|
+//! | Runt frame | `stovetop:runt` | Frames below 60-byte Ethernet minimum |
+//! | Oversized frame | `stovetop:oversized` | Frames exceeding standard/jumbo limits |
+//! | Capture truncation | `stovetop:truncated` | `captured_len < orig_len` |
+//! | Non-zero padding | `stovetop:padding` | Data in Ethernet padding region (covert channels) |
+//! | FCS validation | `stovetop:fcs` | Invalid Ethernet CRC-32 frame check sequence |
+//!
+//! Protocol-level integrity (DNP3 DLL CRC-16) is available via
+//! [`integrity::validate_dnp3_dll_crcs`].
+//!
+//! All findings are emitted as [`BronzeEventFamily::ParseAnomaly`].
 
 pub mod config;
 pub mod findings;

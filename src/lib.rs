@@ -1,12 +1,15 @@
-//! marlinspike-dpi — the shared Marlinspike/Fathom DPI engine.
+//! marlinspike-dpi — pure-Rust DPI engine with anomaly detection for OT/ICS
+//! and IT network monitoring.
 //!
-//! Transforms Iron captures (`pcap` or `pcapng`) into Bronze (structured
-//! protocol records).
+//! Transforms Iron captures (`pcap` or `pcapng`) into Bronze v2 events:
+//! protocol transactions, asset observations, topology, parse anomalies,
+//! and extracted artifacts.
 //!
-//! Fathom continues to consume this crate under the `fm-dpi` workspace alias
-//! and `fm_dpi` Rust library name for compatibility.
-//!
-//! `marlinspike-dpi` is consumable directly from Rust today:
+//! 34 protocol dissectors, plus three detection subsystems:
+//! - **[`stovetop`]** — frame-level integrity (padding, CRC, runt/oversized)
+//! - **[`icmpeeker`]** — ICMP threat detection (redirects, tunnels, recon)
+//! - **[`bilgepump`]** — stateful L2 monitoring (ARP spoofing, VLAN hopping,
+//!   STP hijacking, rogue DHCP, identity conflicts)
 //!
 //! ```no_run
 //! use fm_dpi::DpiEngine;
